@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/alloc-check", "crates/rkw-asm", "crates/z80"]
+members = ["crates/alloc-check", "crates/rkw-asm", "crates/rkw-debug", "crates/z80"]
 
 [workspace.package]
 edition = "2024"

@@ -90,6 +90,35 @@ On the dev machine that is half of L1d; on a typical x86 desktop it is larger
 than the whole of it, streamed continuously alongside the emulated RAM. The
 periodic form costs eight bytes.
 
+## What the debugger turned out to cost
+
+Ticket 0008 built the tiers and then measured them
+(`crates/rkw-debug/tests/throughput.rs`). Two findings, one expected and one
+not.
+
+**The tiers cost nothing, as designed.** Attaching the debugger with nothing
+armed, and arming execution breakpoints that never fire, both measure at 0.99
+to 1.01 of the bare core. The per-instruction addition is a predictable branch
+and a bit test, and it does not show up above the noise.
+
+**Watching memory costs more than watching execution, and not for the reason
+you would guess.** A memory or port watchpoint has to see every bus access, so
+the CPU is monomorphised against a wrapper that reaches the real bus through a
+pointer. The bit test that wrapper carries is free; the indirection is not, and
+it costs about 40%. So a run with no watchpoints armed is given the machine's
+own bus and pays nothing at all — the decision is made once per run, which is
+sound because commands are applied between slices rather than mid-slice.
+
+**A caution about quoted throughput figures.** When a binary contains exactly
+one call site for `Cpu::step` at a given bus type, LLVM inlines the entire
+interpreter into that loop — inlining into a sole call site costs no code
+growth — and it runs at about 270 M instructions/s on the dev machine. A second
+call site anywhere in the binary and both drop to about 165, a difference of
+60% for identical source. Any figure quoted for this core is meaningless
+without saying which regime it was measured in, and a benchmark that compares
+two loops in the same binary has already lost the effect for both. Comparisons
+here are therefore ratios measured within one binary.
+
 ## Keeping the no-allocation rule testable
 
 ADR-0007 ends with "nothing on the emulation thread allocates", which is the
