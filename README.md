@@ -54,14 +54,38 @@ not specify. See the note in `crates/z80/tests/fuse.rs`.
 ```text
 crates/
   z80/            CPU core and disassembler
+adr/              architecture decision records
 docs/
-  architecture.md threading model, hot-path rules, cache sizing
+  architecture.md performance measurements and analysis
+tickets/
+  open/           planned work
+  closed/
 scripts/
   fetch-testdata.sh
 ```
 
 Planned: `rkw-asm` (macro assembler), `rkw-dbg` (debugger core),
 `rkw-spectrum` (ULA, memory map, tape), `rkw-cli`, `rkw-gui`.
+
+## Design
+
+Decisions are recorded as ADRs in [`adr/`](adr/). The ones that shape
+everything else:
+
+- [ADR-0002](adr/0002-machine-cycle-granular-bus-interface.md) — the CPU never
+  sums T-states; every access is a discrete machine cycle. This is what lets
+  contended memory be added later without touching a single instruction.
+- [ADR-0001](adr/0001-decode-opcodes-by-octal-decomposition.md) — decoding by
+  the octal decomposition of the opcode byte, so the undocumented instructions
+  fall out of the structure rather than being enumerated.
+- [ADR-0003](adr/0003-model-wz-and-q-from-the-outset.md) — modelling the
+  internal `WZ` and `Q` registers from the first commit, because retrofitting
+  them is a search through forty instructions for two flag bits.
+- [ADR-0007](adr/0007-emulation-on-its-own-thread-with-three-channels.md) —
+  emulation is a hot path that pushes compact signals to another thread;
+  control comes back at control rate.
+
+Planned work is in [`tickets/open/`](tickets/open/).
 
 ## Building
 
