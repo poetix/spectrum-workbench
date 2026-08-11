@@ -7,8 +7,8 @@ with breakpoints, source-level stepping and a view of what the machine is
 actually doing. The emulator is being grown in stages towards running the 48K
 ROM with tape loading and saving, screen output and sound.
 
-**Status: early.** The CPU core and disassembler are complete and validated.
-Nothing else exists yet.
+**Status: early.** The CPU core and disassembler are complete and validated,
+and the assembler's front end parses. Nothing runs a Spectrum yet.
 
 ## What works
 
@@ -49,10 +49,30 @@ memory; the researched behaviour takes them from `WZ`, which the instruction
 does not itself set, so the correct answer depends on state the test files do
 not specify. See the note in `crates/z80/tests/fuse.rs`.
 
+### The assembler front end
+
+`rkw-asm` lexes and parses sjasmplus-compatible source (ADR-0011) into a syntax
+tree. Diagnostics carry a file, line, column and caret span, and recovery
+continues at the next line, so one typo does not cascade and one run reports
+every independent mistake.
+
+The tree records what was written rather than what it means: `(HL)` is a
+parenthesised identifier until instruction selection decides otherwise, and the
+spelling of every literal and operator survives — `10`, `$0A` and `%1010` are
+distinct nodes with the same value. Nothing later has to unpick a decision the
+parser had no business making.
+
+That is what makes the main test possible. It disassembles every opcode in every
+prefix page, parses the text, prints the tree back, and requires it to be
+identical to what it started from — so a merged operand or a renormalised
+literal fails rather than passing as "it parsed". Assembling that text back to
+the bytes it was decoded from closes the loop, and is the next stage.
+
 ## Layout
 
 ```text
 crates/
+  rkw-asm/        macro assembler: lexer and parser so far
   z80/            CPU core and disassembler
 adr/              architecture decision records
 docs/
@@ -64,8 +84,8 @@ scripts/
   fetch-testdata.sh
 ```
 
-Planned: `rkw-asm` (macro assembler), `rkw-dbg` (debugger core),
-`rkw-spectrum` (ULA, memory map, tape), `rkw-cli`, `rkw-gui`.
+Planned: `rkw-dbg` (debugger core), `rkw-spectrum` (ULA, memory map, tape),
+`rkw-cli`, `rkw-gui`.
 
 ## Design
 

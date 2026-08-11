@@ -22,6 +22,10 @@ opposite direction.
       distance and the limit
 - [ ] Property test: assemble then disassemble every encoding, and assert the
       result re-assembles to identical bytes
+- [ ] End-to-end test: assemble a short source, load the bytes into a
+      `FlatMemory`, run them on the CPU, and assert the resulting registers and
+      memory. The property test above never leaves the assembler; this is the
+      only check that what it emits is what the hardware does.
 
 ## Notes
 
