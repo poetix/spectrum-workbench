@@ -18,6 +18,10 @@ use std::path::{Path, PathBuf};
 pub struct FileId(u32);
 
 impl FileId {
+    pub(crate) fn from_index(index: u32) -> Self {
+        FileId(index)
+    }
+
     pub fn index(self) -> usize {
         self.0 as usize
     }
@@ -178,6 +182,17 @@ impl SourceMap {
 
     pub fn file(&self, id: FileId) -> &SourceFile {
         &self.files[id.index()]
+    }
+
+    /// How many files have been registered. Ids are `0..file_count`, in the
+    /// order they were added, which is the order a listing walks them.
+    pub fn file_count(&self) -> u32 {
+        self.files.len() as u32
+    }
+
+    pub fn file_id(&self, index: u32) -> FileId {
+        assert!(index < self.file_count(), "no such file");
+        FileId::from_index(index)
     }
 
     /// The text a span covers.

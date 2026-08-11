@@ -467,6 +467,31 @@ impl Symbols {
         }
     }
 
+    /// Every defined name with its value and what kind of symbol it is.
+    ///
+    /// Constants that nothing referred to are evaluated here, so that a symbol
+    /// table dump shows them: a constant nobody used is exactly the kind of
+    /// thing someone reads a symbol table to find.
+    pub fn entries(&mut self) -> Vec<(String, i64, SymbolKind)> {
+        let keys: Vec<String> = self.names.keys().cloned().collect();
+        let mut out = Vec::with_capacity(keys.len());
+        for key in keys {
+            let symbol = &self.names[&key];
+            let (span, kind) = (symbol.span, symbol.kind);
+            if let Ok(value) = self.lookup(&key, span) {
+                out.push((key, value, kind));
+            }
+        }
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
+    /// Where a symbol was defined.
+    pub fn span_of(&self, name: &str) -> Option<Span> {
+        let key = self.resolve_key(name)?;
+        Some(self.names[&key].span)
+    }
+
     /// Every defined name and its value, for the listing and the debugger's
     /// symbol map. Constants that were never referenced are evaluated here.
     pub fn iter_values(&mut self) -> Vec<(String, i64)> {

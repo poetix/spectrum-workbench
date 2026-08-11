@@ -7,8 +7,9 @@ with breakpoints, source-level stepping and a view of what the machine is
 actually doing. The emulator is being grown in stages towards running the 48K
 ROM with tape loading and saving, screen output and sound.
 
-**Status: early.** The CPU core and disassembler are complete and validated,
-and the assembler turns source into Z80 machine code that runs on it. Nothing
+**Status: early.** The CPU core and disassembler are complete and validated, and
+the assembler is finished: it turns source into Z80 machine code that runs on
+it, with macros, conditional assembly, a listing and debug information. Nothing
 runs a Spectrum yet.
 
 ## What works
@@ -77,6 +78,14 @@ different questions — the round trip catches a wrong encoding, and running it
 catches an encoding that the disassembler agrees with and the hardware does
 not.
 
+The assembler emits a listing — address, bytes, source line, and macro
+expansions marked by depth — and a debug information sidecar in a
+[documented, versioned format](docs/debug-info.md). The debugger reads that to
+answer both of the questions a raw binary cannot: which source produced the
+instruction at an address, and which addresses a line of source produced. The
+second is one-to-many, because a line inside a macro used five times produced
+five of them.
+
 Macros expand with positional arguments bound as expressions, so an argument can
 be a register or an addressing mode as easily as a number. Local labels inside a
 macro hang off a name unique to each expansion, and an error inside one points
@@ -104,11 +113,12 @@ address once a forward reference resolves.
 
 ```text
 crates/
-  rkw-asm/        macro assembler: parser, expressions, encoder
+  rkw-asm/        macro assembler: complete
   z80/            CPU core and disassembler
 adr/              architecture decision records
 docs/
   architecture.md performance measurements and analysis
+  debug-info.md   the debug information format the debugger reads
 tickets/
   open/           planned work
   closed/
