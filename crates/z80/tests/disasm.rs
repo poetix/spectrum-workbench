@@ -7,8 +7,8 @@
 //! its displacement before its immediate, `DD CB d op` reads its displacement
 //! before its opcode — and a length mismatch is exactly the symptom.
 
-use z80::disasm::{Flow, disassemble, disassemble_range};
-use z80::{Cpu, FlatMemory};
+use z80::disasm::{Flow, decode, disassemble, disassemble_range, text as decoded_text};
+use z80::{Cpu, FlatMemory, Instruction};
 
 const ORG: u16 = 0x8000;
 
@@ -326,4 +326,30 @@ fn range_disassembly_and_listing_format() {
 
     assert_eq!(insns[0].listing_line(), "8000  21 00 58     LD HL,$5800");
     assert_eq!(insns[4].listing_line(), "800B  ED B0        LDIR");
+}
+
+/// A debugger stepping over a call needs the length and the flow, and nothing
+/// else; the text is a separate cost it only pays for the lines on screen.
+/// Both halves have to come from the same walk, so the composition of them is
+/// the same thing `disassemble` produces.
+#[test]
+fn decoding_and_formatting_are_separate_calls() {
+    let mut mem = FlatMemory::new();
+    mem.load(ORG, &[0xCD, 0x00, 0x90]); // CALL $9000
+
+    let d = decode(&mem, ORG);
+    assert_eq!(d.len, 3);
+    assert_eq!(d.next_addr(), 0x8003);
+    assert_eq!(
+        d.flow,
+        Flow::Call {
+            target: Some(0x9000),
+            conditional: false
+        }
+    );
+    assert!(!d.undocumented);
+
+    assert_eq!(decoded_text(&mem, &d), "CALL $9000");
+    assert_eq!(Instruction::render(&mem, &d), disassemble(&mem, ORG));
+    assert_eq!(disassemble(&mem, ORG).decoded(), d);
 }

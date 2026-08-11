@@ -90,6 +90,27 @@ On the dev machine that is half of L1d; on a typical x86 desktop it is larger
 than the whole of it, streamed continuously alongside the emulated RAM. The
 periodic form costs eight bytes.
 
+## Keeping the no-allocation rule testable
+
+ADR-0007 ends with "nothing on the emulation thread allocates", which is the
+kind of rule that decays quietly: a `Vec` added inside a decode breaks no test
+and costs nothing visible until something is measured under load.
+
+`crates/alloc-check` makes it an assertion instead. It is a global allocator
+that counts allocations *per thread* — a process-wide counter would mostly be
+measuring the test harness — and a `count` function returning what a closure
+allocated. A test installs it, measures the path in question, and asserts zero,
+having first asserted that something known to allocate does, so an uninstalled
+allocator fails loudly rather than passing everything vacuously.
+
+It is a separate crate for one reason: the workspace forbids `unsafe_code`, and
+`forbid` cannot be lifted by an inner `allow`, so the single `unsafe impl
+GlobalAlloc` lives in the one crate that opts out of the workspace lints and is
+a dev-dependency of nothing that ships.
+
+The first user is the disassembler's decode path (ticket 0007). The trace ring
+and the emulation thread proper are the ones it exists for.
+
 ## Performance builds
 
 `[profile.release]` uses fat LTO and a single codegen unit. An interpreter is

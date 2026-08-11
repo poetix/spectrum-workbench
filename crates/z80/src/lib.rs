@@ -28,5 +28,5 @@ mod registers;
 
 pub use bus::{Bus, FlatMemory};
 pub use cpu::{Cpu, Stop};
-pub use disasm::{Flow, Instruction, Peek, disassemble, disassemble_range};
+pub use disasm::{Decoded, Flow, Instruction, Peek, decode, disassemble, disassemble_range};
 pub use registers::{Index, InterruptMode, Reg8, Reg16, Regs, flag};

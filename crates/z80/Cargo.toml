@@ -9,5 +9,8 @@ description = "Z80 CPU core with M-cycle-granular bus access"
 
 [dependencies]
 
+[dev-dependencies]
+alloc-check = { path = "../alloc-check" }
+
 [lints]
 workspace = true
