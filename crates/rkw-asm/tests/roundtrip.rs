@@ -10,10 +10,15 @@
 //! something — an operand merged, a displacement's sign dropped, a hex literal
 //! silently renormalised — rather than merely that the parse succeeded.
 //!
-//! What it does not check is that the operands *mean* the same thing; nothing
-//! in this crate knows that yet. Ticket 0003 closes the loop by assembling the
-//! text back to the bytes it was decoded from.
+//! The second test closes the loop through the encoder: each instruction is
+//! assembled from that text and disassembled again, and has to come back the
+//! same. Text to bytes to text, checked against a CPU core validated by Fuse
+//! and `zexall`, is as close to an independent check of the encoder as this
+//! repository can produce.
 
+mod common;
+
+use common::assemble_one;
 use rkw_asm::{SourceMap, parse};
 use z80::{FlatMemory, disassemble};
 
@@ -114,4 +119,95 @@ fn the_corpus_covers_the_awkward_forms() {
             "corpus lacks {expected:?}"
         );
     }
+}
+
+#[test]
+fn every_instruction_assembles_to_an_encoding_that_disassembles_back() {
+    // Not a byte-for-byte comparison with the opcode the text came from: some
+    // encodings are not canonical. `DD 40` is `LD B,B` with a prefix that
+    // changes nothing, and the ED page has two-byte no-ops; both disassemble to
+    // an instruction that assembles to the shorter form. Requiring the text to
+    // survive the trip is the strongest check that holds for all of them.
+    for text in every_instruction() {
+        let bytes = match assemble_one(&text, ORG) {
+            Ok(bytes) => bytes,
+            Err(e) => panic!("{text:?} did not assemble: {:?}", e.diagnostic().message),
+        };
+
+        let mut mem = FlatMemory::new();
+        mem.load(ORG, &bytes);
+        let decoded = disassemble(&mem, ORG);
+
+        assert_eq!(decoded.text, text, "assembled to {bytes:02X?}");
+        assert_eq!(
+            usize::from(decoded.len),
+            bytes.len(),
+            "{text:?} assembled to {bytes:02X?}, which the CPU reads as {} bytes",
+            decoded.len
+        );
+    }
+}
+
+#[test]
+fn the_encoding_of_a_known_instruction_is_the_documented_one() {
+    // A handful of hand-checked encodings, so that a systematic error shared by
+    // the assembler and the disassembler cannot pass the round trip unnoticed.
+    for (text, expected) in [
+        ("NOP", &[0x00][..]),
+        ("LD A,$2A", &[0x3E, 0x2A]),
+        ("LD B,A", &[0x47]),
+        ("LD HL,$1234", &[0x21, 0x34, 0x12]),
+        ("LD (HL),$FF", &[0x36, 0xFF]),
+        ("LD A,(IX+$05)", &[0xDD, 0x7E, 0x05]),
+        ("LD (IY-$03),B", &[0xFD, 0x70, 0xFD]),
+        ("LD (IX+$05),$FF", &[0xDD, 0x36, 0x05, 0xFF]),
+        ("ADD A,B", &[0x80]),
+        ("SUB $10", &[0xD6, 0x10]),
+        ("ADD HL,DE", &[0x19]),
+        ("ADC HL,BC", &[0xED, 0x4A]),
+        ("SBC HL,SP", &[0xED, 0x72]),
+        ("ADD IX,IX", &[0xDD, 0x29]),
+        ("INC (IX+$01)", &[0xDD, 0x34, 0x01]),
+        ("BIT 7,(HL)", &[0xCB, 0x7E]),
+        ("SET 0,(IX+$02)", &[0xDD, 0xCB, 0x02, 0xC6]),
+        ("RES 1,(IY+$02),C", &[0xFD, 0xCB, 0x02, 0x89]),
+        ("SLL A", &[0xCB, 0x37]),
+        ("JP $8000", &[0xC3, 0x00, 0x80]),
+        ("JP NZ,$8000", &[0xC2, 0x00, 0x80]),
+        ("JP (IX)", &[0xDD, 0xE9]),
+        ("CALL $1234", &[0xCD, 0x34, 0x12]),
+        ("RET PO", &[0xE0]),
+        ("RST $38", &[0xFF]),
+        ("PUSH AF", &[0xF5]),
+        ("EX AF,AF'", &[0x08]),
+        ("EX (SP),IY", &[0xFD, 0xE3]),
+        ("IN A,($FE)", &[0xDB, 0xFE]),
+        ("IN (C)", &[0xED, 0x70]),
+        ("OUT (C),0", &[0xED, 0x71]),
+        ("OUT (C),D", &[0xED, 0x51]),
+        ("IM 2", &[0xED, 0x5E]),
+        ("LD A,I", &[0xED, 0x57]),
+        ("LD ($4000),BC", &[0xED, 0x43, 0x00, 0x40]),
+        ("LD ($4000),HL", &[0x22, 0x00, 0x40]),
+        ("LD SP,IX", &[0xDD, 0xF9]),
+        ("LDIR", &[0xED, 0xB0]),
+        ("LD IXH,$05", &[0xDD, 0x26, 0x05]),
+        ("LD B,IYL", &[0xFD, 0x45]),
+    ] {
+        assert_eq!(
+            assemble_one(text, ORG).expect("assembles"),
+            expected,
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn a_relative_jump_is_encoded_as_a_distance() {
+    // `JR $8002` from $8000 goes nowhere: the CPU has already advanced past the
+    // two bytes by the time it adds the displacement.
+    assert_eq!(assemble_one("JR $8002", ORG).unwrap(), [0x18, 0x00]);
+    assert_eq!(assemble_one("JR $8000", ORG).unwrap(), [0x18, 0xFE]);
+    assert_eq!(assemble_one("DJNZ $7F82", ORG).unwrap(), [0x10, 0x80]);
+    assert_eq!(assemble_one("JR NZ,$8081", ORG).unwrap(), [0x20, 0x7F]);
 }

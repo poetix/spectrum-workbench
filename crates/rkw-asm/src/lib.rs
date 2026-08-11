@@ -46,15 +46,18 @@
 
 pub mod ast;
 pub mod diag;
+pub mod encode;
 pub mod eval;
 pub mod keywords;
 pub mod lex;
+pub mod operand;
 pub mod parse;
 pub mod source;
 pub mod symbols;
 
 pub use ast::{BinOp, Expr, ExprKind, Label, LabelKind, Op, Program, Statement, UnOp};
 pub use diag::{Diagnostic, Severity};
+pub use encode::{EncodeError, Plan, encode, plan};
 pub use eval::{EvalError, Site, eval};
 pub use lex::{Lexed, Quote, StrLit, StrSuffix, Sym, Token, TokenKind, lex};
 pub use parse::{Parsed, parse};

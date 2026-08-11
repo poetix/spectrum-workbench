@@ -8,7 +8,8 @@ actually doing. The emulator is being grown in stages towards running the 48K
 ROM with tape loading and saving, screen output and sound.
 
 **Status: early.** The CPU core and disassembler are complete and validated,
-and the assembler's front end parses. Nothing runs a Spectrum yet.
+and the assembler turns source into Z80 machine code that runs on it. Nothing
+runs a Spectrum yet.
 
 ## What works
 
@@ -49,12 +50,12 @@ memory; the researched behaviour takes them from `WZ`, which the instruction
 does not itself set, so the correct answer depends on state the test files do
 not specify. See the note in `crates/z80/tests/fuse.rs`.
 
-### The assembler front end
+### The assembler
 
-`rkw-asm` lexes and parses sjasmplus-compatible source (ADR-0011) into a syntax
-tree. Diagnostics carry a file, line, column and caret span, and recovery
-continues at the next line, so one typo does not cascade and one run reports
-every independent mistake.
+`rkw-asm` assembles sjasmplus-compatible source (ADR-0011) into Z80 machine
+code. The front end lexes and parses it into a syntax tree; diagnostics carry a
+file, line, column and caret span, and recovery continues at the next line, so
+one typo does not cascade and one run reports every independent mistake.
 
 The tree records what was written rather than what it means: `(HL)` is a
 parenthesised identifier until instruction selection decides otherwise, and the
@@ -65,8 +66,16 @@ parser had no business making.
 That is what makes the main test possible. It disassembles every opcode in every
 prefix page, parses the text, prints the tree back, and requires it to be
 identical to what it started from — so a merged operand or a renormalised
-literal fails rather than passing as "it parsed". Assembling that text back to
-the bytes it was decoded from closes the loop, and is the next stage.
+literal fails rather than passing as "it parsed". The encoder then closes the
+loop: the same corpus is assembled and disassembled again, and has to come back
+the same text. Every opcode in every page, including the undocumented ones.
+
+Beyond that the assembler is checked against the CPU rather than against itself:
+short programs are assembled, loaded where they were assembled for, and run, and
+the tests assert what the machine did with them. Those two checks answer
+different questions — the round trip catches a wrong encoding, and running it
+catches an encoding that the disassembler agrees with and the hardware does
+not.
 
 Behind the front end are expression evaluation and the symbol table: 32-bit
 arithmetic with sjasmplus's operator set, labels both global and local,
@@ -81,7 +90,7 @@ address once a forward reference resolves.
 
 ```text
 crates/
-  rkw-asm/        macro assembler: lexer and parser so far
+  rkw-asm/        macro assembler: parser, expressions, encoder
   z80/            CPU core and disassembler
 adr/              architecture decision records
 docs/
