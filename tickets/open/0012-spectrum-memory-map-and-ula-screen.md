@@ -15,6 +15,10 @@ layout, and rendering it to a framebuffer. No contention yet (0020).
 - [ ] `Bus` implementation with ROM write protection
 - [ ] Screen memory decoded from its interleaved layout (third, character row,
       pixel row) to a linear framebuffer
+- [ ] The decode is a function of a byte source and a base address, not of the
+      live machine at $4000, so the debugger can render a back buffer through
+      the same code (0025); flash phase is a parameter rather than read from a
+      frame counter
 - [ ] Attribute area: ink, paper, bright, flash
 - [ ] Flash attribute alternates on the correct 16-frame cadence
 - [ ] Border colour from port 0xFE writes, rendered per scanline

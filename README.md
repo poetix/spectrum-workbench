@@ -126,8 +126,8 @@ scripts/
   fetch-testdata.sh
 ```
 
-Planned: `rkw-dbg` (debugger core), `rkw-spectrum` (ULA, memory map, tape),
-`rkw-cli`, `rkw-gui`.
+Planned: `rkw-debug` (debugger core), `rkw-spectrum` (ULA, memory map, tape),
+`rkw-cli`, `rkw-dap` (Debug Adapter Protocol front end), `rkw-gui`.
 
 ## Design
 
@@ -146,6 +146,10 @@ everything else:
 - [ADR-0007](adr/0007-emulation-on-its-own-thread-with-three-channels.md) —
   emulation is a hot path that pushes compact signals to another thread;
   control comes back at control rate.
+- [ADR-0013](adr/0013-ui-agnostic-debugger-core-cli-first.md) and
+  [ADR-0016](adr/0016-dap-as-the-second-debugger-front-end.md) — the debugger is
+  a library with a presentation-free command layer; a gdb-style REPL and a Debug
+  Adapter Protocol server are two front ends over the same executor.
 
 Planned work is in [`tickets/open/`](tickets/open/).
 
