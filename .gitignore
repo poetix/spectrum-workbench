@@ -1,0 +1,5 @@
+/target
+
+# Third-party conformance test data, fetched by scripts/fetch-testdata.sh.
+# Kept out of the tree for licensing reasons — see that script.
+/crates/z80/tests/fixtures/

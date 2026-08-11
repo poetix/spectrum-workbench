@@ -1,0 +1,33 @@
+[workspace]
+resolver = "3"
+members = ["crates/z80"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.85"
+repository = "https://github.com/poetix/spectrum-workbench"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+# The CPU core is a big pile of small arithmetic ops; these lints fight it.
+identity_op = "allow"
+unusual_byte_groupings = "allow"
+
+# An interpreter is one hot loop whose inner workings are spread across the
+# cpu, alu and bus modules, so cross-module inlining matters more here than in
+# most code. Slower builds are worth it for the release profile.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+
+# The conformance exercisers run for billions of instructions and are useless
+# without optimisation, so give the test profile the same treatment.
+[profile.test]
+opt-level = 1
+
+[profile.bench]
+lto = "fat"
+codegen-units = 1
