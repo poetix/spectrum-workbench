@@ -203,6 +203,17 @@ fn dollar_is_the_current_address_unless_digits_follow() {
         ]
     ));
     assert_eq!(number("$2"), 2);
+    // `$$` is the start of the current section.
+    assert_eq!(kinds("$$").remove(0), TokenKind::SectionStart);
+    assert!(matches!(
+        &kinds("$-$$")[..],
+        [
+            TokenKind::Here,
+            TokenKind::Sym(Sym::Minus),
+            TokenKind::SectionStart,
+            ..
+        ]
+    ));
 }
 
 #[test]

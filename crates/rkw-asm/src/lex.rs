@@ -163,6 +163,8 @@ pub enum TokenKind {
     },
     /// `$` alone: the address of the instruction being assembled.
     Here,
+    /// `$$`: the address the current section started at.
+    SectionStart,
     Sym(Sym),
     /// End of line. Kept as a token because the assembler is line-oriented:
     /// statements end here, and so does error recovery.
@@ -195,6 +197,7 @@ impl Token {
                 format!("`{id}_{}`", if *forward { 'F' } else { 'B' })
             }
             TokenKind::Here => "`$`".into(),
+            TokenKind::SectionStart => "`$$`".into(),
             TokenKind::Sym(s) => format!("`{}`", s.text()),
             TokenKind::Newline => "end of line".into(),
             TokenKind::Eof => "end of file".into(),
@@ -278,6 +281,7 @@ impl<'a> Lexer<'a> {
                 | TokenKind::Str(_)
                 | TokenKind::TempRef { .. }
                 | TokenKind::Here
+                | TokenKind::SectionStart
                 | TokenKind::Sym(Sym::RParen)
                 | TokenKind::Sym(Sym::RBracket)
                 | TokenKind::Sym(Sym::RBrace)
@@ -409,16 +413,21 @@ impl<'a> Lexer<'a> {
         self.push(start, TokenKind::Ident(text));
     }
 
-    /// `$` is hexadecimal when digits follow it and the current address when
-    /// they do not.
+    /// `$` is hexadecimal when digits follow it, the start of the current
+    /// section when doubled, and the current address otherwise.
     fn dollar(&mut self) {
         if matches!(self.peek_at(1), Some(c) if c.is_ascii_hexdigit()) {
             self.sigil_number(16, "hexadecimal");
-        } else {
-            let start = self.pos;
-            self.bump();
-            self.push(start, TokenKind::Here);
+            return;
         }
+        let start = self.pos;
+        self.bump();
+        let kind = if self.eat('$') {
+            TokenKind::SectionStart
+        } else {
+            TokenKind::Here
+        };
+        self.push(start, kind);
     }
 
     /// `%` prefixes a binary literal only where no value has just been read;

@@ -340,6 +340,7 @@ impl Parser {
                 forward: *forward,
             },
             TokenKind::Here => ExprKind::Here,
+            TokenKind::SectionStart => ExprKind::SectionStart,
             TokenKind::Sym(Sym::LParen) => return self.paren(),
             _ => {
                 let found = self.cur().describe();

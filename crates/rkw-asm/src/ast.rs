@@ -107,6 +107,8 @@ pub enum ExprKind {
     },
     /// `$`.
     Here,
+    /// `$$`, the start of the current section.
+    SectionStart,
     /// Parentheses, kept because they are the surface mark of a memory operand
     /// and cannot be told from grouping until the mnemonic is known.
     Paren(Box<Expr>),
@@ -215,7 +217,7 @@ pub enum BinOp {
     ShlWord,
     Shr,
     ShrWord,
-    /// `>>>`, shifting in the sign bit rather than zero.
+    /// `>>>`, shifting in zeros where `>>` propagates the sign bit.
     Ushr,
     /// `<?`
     Min,
@@ -318,6 +320,7 @@ impl fmt::Display for Expr {
                 write!(f, "{id}_{}", if *forward { 'F' } else { 'B' })
             }
             ExprKind::Here => f.write_str("$"),
+            ExprKind::SectionStart => f.write_str("$$"),
             ExprKind::Paren(inner) => write!(f, "({inner})"),
             ExprKind::Unary { op, operand } => {
                 f.write_str(op.text())?;

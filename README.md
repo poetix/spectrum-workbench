@@ -68,6 +68,15 @@ identical to what it started from — so a merged operand or a renormalised
 literal fails rather than passing as "it parsed". Assembling that text back to
 the bytes it was decoded from closes the loop, and is the next stage.
 
+Behind the front end are expression evaluation and the symbol table: 32-bit
+arithmetic with sjasmplus's operator set, labels both global and local,
+`MODULE` scoping, numeric temporary labels, and constants resolved on demand so
+that a circular `EQU` is reported as a cycle rather than as a value that never
+settles. Assembly runs to a fixpoint ([ADR-0014](adr/0014-assemble-to-a-fixpoint.md)),
+which on the Z80 is cheaper than it sounds: instruction size is a function of
+the parse tree alone, so only `DS`, `ALIGN` and conditional assembly can move an
+address once a forward reference resolves.
+
 ## Layout
 
 ```text
