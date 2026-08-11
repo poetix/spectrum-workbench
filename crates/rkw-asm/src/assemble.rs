@@ -34,6 +34,15 @@ use crate::symbols::Symbols;
 /// How many passes to make before giving up on a source that will not settle.
 const PASS_LIMIT: u32 = 8;
 
+/// How deep macro expansion may nest before it is reported as runaway
+/// recursion. The limit exists so that a recursive macro produces a diagnostic
+/// naming the chain rather than a stack overflow.
+const MAX_EXPANSION_DEPTH: usize = 32;
+
+/// A repetition count beyond which the source is more likely wrong than
+/// ambitious.
+const MAX_REPETITIONS: i64 = 65_536;
+
 /// A run of assembled bytes and the address they belong at.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Segment {
@@ -135,6 +144,26 @@ pub struct LineRecord {
     pub span: Span,
     pub address: u16,
     pub length: u16,
+    /// The macro expansion this statement was assembled inside, as an index
+    /// into [`Assembled::expansions`]. `None` for source written directly.
+    pub expansion: Option<usize>,
+}
+
+/// One use of a macro.
+///
+/// A macro body is one set of statements however many times it is used, so
+/// which expansion a statement belongs to cannot live on the statement. It is
+/// recorded here instead, and the listing in ticket 0006 reads it back to show
+/// the nesting.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Expansion {
+    pub name: String,
+    /// Where the macro was defined.
+    pub defined_at: Span,
+    /// Where this expansion was asked for.
+    pub invoked_at: Span,
+    /// The expansion this one happened inside.
+    pub parent: Option<usize>,
 }
 
 pub struct Assembled {
@@ -143,6 +172,9 @@ pub struct Assembled {
     pub diagnostics: Vec<Diagnostic>,
     /// One per statement that emitted bytes, in address order within a pass.
     pub lines: Vec<LineRecord>,
+    /// Every macro expansion the final pass performed, in the order they
+    /// started. [`LineRecord::expansion`] indexes into this.
+    pub expansions: Vec<Expansion>,
     pub passes: u32,
 }
 
@@ -183,6 +215,7 @@ pub fn assemble(map: &mut SourceMap, root: FileId) -> Assembled {
             return Assembled {
                 image: state.image,
                 lines: state.lines,
+                expansions: state.expansions,
                 diagnostics,
                 passes: assembler.symbols.pass(),
                 symbols: assembler.symbols,
@@ -200,6 +233,16 @@ fn non_convergence(symbols: &Symbols, root: FileId) -> Diagnostic {
     )
     .with_note(format!("still moving: {still_moving}"))
     .with_note("a conditional or a reserved block whose size depends on itself will do this")
+}
+
+/// A macro definition: its parameters and the statements between `MACRO` and
+/// `ENDM`, collected but not assembled.
+struct Macro {
+    name: String,
+    parameters: Vec<String>,
+    body: Vec<Statement>,
+    /// The `MACRO` line, for the "defined here" half of a two-site error.
+    span: Span,
 }
 
 /// One branch of an `IF`, `IFDEF` or `IFN`.
@@ -229,6 +272,12 @@ struct State {
     /// The files currently being walked, innermost last, for relative paths
     /// and for reporting an include cycle with its chain.
     includes: Vec<(FileId, Span)>,
+    /// Macros defined so far on this pass. Collected afresh every pass, like
+    /// everything else that is not the symbol table.
+    macros: HashMap<String, Rc<Macro>>,
+    expansions: Vec<Expansion>,
+    /// The expansions currently being assembled, innermost last.
+    expanding: Vec<usize>,
     /// Set by `END`, which stops assembly wherever it appears.
     finished: bool,
 }
@@ -245,6 +294,9 @@ impl State {
             diagnostics: Vec::new(),
             conditionals: Vec::new(),
             includes: vec![(root, Span::at(root, 0))],
+            macros: HashMap::new(),
+            expansions: Vec::new(),
+            expanding: Vec::new(),
             finished: false,
         }
     }
@@ -263,7 +315,29 @@ impl State {
     }
 
     fn error(&mut self, span: Span, message: impl Into<String>) {
-        self.diagnostics.push(Diagnostic::error(span, message));
+        self.report(Diagnostic::error(span, message));
+    }
+
+    /// Record a diagnostic, naming the expansion it happened inside.
+    ///
+    /// This is what makes an error in a macro tractable: the diagnostic itself
+    /// points into the macro body, which is where the mistake is written, and
+    /// the notes point at each invocation that led there, which is what the
+    /// reader needs to know to work out why the values were wrong.
+    fn report(&mut self, mut diagnostic: Diagnostic) {
+        for &index in self.expanding.iter().rev() {
+            let expansion = &self.expansions[index];
+            diagnostic = diagnostic
+                .with_related(
+                    expansion.invoked_at,
+                    format!("in this expansion of `{}`", expansion.name),
+                )
+                .with_related(
+                    expansion.defined_at,
+                    format!("`{}` is defined here", expansion.name),
+                );
+        }
+        self.diagnostics.push(diagnostic);
     }
 
     fn write(&mut self, bytes: &[u8]) {
@@ -276,7 +350,7 @@ impl State {
 
     fn finish(&mut self) {
         for open in std::mem::take(&mut self.conditionals) {
-            self.diagnostics.push(Diagnostic::error(
+            self.report(Diagnostic::error(
                 open.span,
                 "this conditional is never closed",
             ));
@@ -310,11 +384,210 @@ impl Assembler<'_> {
 
     fn walk(&mut self, file: FileId, state: &mut State) {
         let program = self.program(file);
-        for statement in &program.statements {
+        self.run(&program.statements, state);
+    }
+
+    /// Assemble a run of statements: a file, a macro body, or the body of a
+    /// repetition. Indexed rather than iterated because the block directives
+    /// consume statements up to their own terminator.
+    fn run(&mut self, statements: &[Statement], state: &mut State) {
+        let mut at = 0;
+        while at < statements.len() && !state.finished {
+            let statement = &statements[at];
+            let name = directive_name(statement);
+            match name.as_str() {
+                // Blocks are collected whether or not they are being
+                // assembled: a `REPT` inside a skipped `IF` still has to be
+                // stepped over as a unit, or its `ENDR` closes nothing.
+                "macro" | "rept" | "dup" => {
+                    let Some(end) = block_end(statements, at) else {
+                        state.error(statement.span, format!("`{name}` is never closed"));
+                        return;
+                    };
+                    let body = &statements[at + 1..end];
+                    if state.active() {
+                        if name == "macro" {
+                            self.define_macro(statement, body, state);
+                        } else {
+                            self.repeat(statement, body, state);
+                        }
+                    }
+                    at = end + 1;
+                }
+                "endm" | "endmacro" | "endr" | "edup" => {
+                    state.error(
+                        statement.span,
+                        format!("`{}` closes nothing", name.to_uppercase()),
+                    );
+                    at += 1;
+                }
+                _ => {
+                    self.statement(statement, state);
+                    at += 1;
+                }
+            }
+        }
+    }
+
+    // -- macros -------------------------------------------------------------
+
+    /// `name MACRO p,q` or `MACRO name p,q`, which are the same thing.
+    fn define_macro(&mut self, statement: &Statement, body: &[Statement], state: &mut State) {
+        let op = statement.op.as_ref().expect("a MACRO statement");
+        let (name, parameters) = match &statement.label {
+            Some(label) => (label.name.to_string(), &op.args[..]),
+            None => match op.args.split_first() {
+                Some((first, rest)) => match first.as_ident() {
+                    Some(name) => (name.to_string(), rest),
+                    None => return state.error(first.span, "expected a macro name"),
+                },
+                None => return state.error(statement.span, "`MACRO` needs a name"),
+            },
+        };
+
+        if encode::is_instruction(&name) {
+            return state.error(
+                statement.span,
+                format!("`{name}` is an instruction, so a macro cannot be called that"),
+            );
+        }
+
+        let mut names = Vec::with_capacity(parameters.len());
+        for parameter in parameters {
+            match parameter.as_ident() {
+                Some(name) => names.push(name.to_string()),
+                None => return state.error(parameter.span, "expected a parameter name"),
+            }
+        }
+
+        let key = name.to_ascii_lowercase();
+        if let Some(existing) = state.macros.get(&key) {
+            let previous = existing.span;
+            return state.report(
+                Diagnostic::error(statement.span, format!("`{name}` is already a macro"))
+                    .with_related(previous, "the earlier definition is"),
+            );
+        }
+        state.macros.insert(
+            key,
+            Rc::new(Macro {
+                name,
+                parameters: names,
+                body: body.to_vec(),
+                span: statement.span,
+            }),
+        );
+    }
+
+    fn expand(&mut self, definition: &Rc<Macro>, call: &Statement, state: &mut State) {
+        let op = call.op.as_ref().expect("an invocation");
+        if op.args.len() != definition.parameters.len() {
+            return state.error(
+                call.span,
+                format!(
+                    "`{}` takes {} argument{}, not {}",
+                    definition.name,
+                    definition.parameters.len(),
+                    if definition.parameters.len() == 1 {
+                        ""
+                    } else {
+                        "s"
+                    },
+                    op.args.len()
+                ),
+            );
+        }
+        if state.expanding.len() >= MAX_EXPANSION_DEPTH {
+            // Reported through the expansion stack, so the message names the
+            // chain that got here rather than only where it stopped.
+            return state.error(
+                call.span,
+                format!(
+                    "`{}` is expanded more than {MAX_EXPANSION_DEPTH} deep",
+                    definition.name
+                ),
+            );
+        }
+
+        let bindings: Vec<(&str, &Expr)> = definition
+            .parameters
+            .iter()
+            .map(String::as_str)
+            .zip(op.args.iter())
+            .collect();
+        let body: Vec<Statement> = definition
+            .body
+            .iter()
+            .map(|statement| substitute_statement(statement, &bindings))
+            .collect();
+
+        let index = state.expansions.len();
+        state.expansions.push(Expansion {
+            name: definition.name.clone(),
+            defined_at: definition.span,
+            invoked_at: call.span,
+            parent: state.expanding.last().copied(),
+        });
+        state.expanding.push(index);
+
+        // Local labels inside the body hang off a name unique to this
+        // expansion, so the same `.loop` written once is a different symbol
+        // every time the macro is used.
+        let enclosing = self.symbols.local_scope();
+        self.symbols
+            .set_local_scope(Some(format!("{}#{index}", definition.name)));
+
+        self.run(&body, state);
+
+        self.symbols.set_local_scope(enclosing);
+        state.expanding.pop();
+    }
+
+    /// `REPT n` / `DUP n`, with an optional name for the iteration counter.
+    fn repeat(&mut self, statement: &Statement, body: &[Statement], state: &mut State) {
+        let op = statement.op.as_ref().expect("a REPT statement");
+        let Some(count) = op.args.first() else {
+            return state.error(statement.span, "`REPT` needs a count");
+        };
+        // Unresolved on the first pass means no iterations for now; defining
+        // the symbol moves addresses, which asks for another pass.
+        let Some(count) = self.value(count, state) else {
+            return;
+        };
+        if count < 0 {
+            return state.error(
+                statement.span,
+                format!("`REPT {count}` repeats a negative number of times"),
+            );
+        }
+        if count > MAX_REPETITIONS {
+            return state.error(
+                statement.span,
+                format!("`REPT {count}` is more than the {MAX_REPETITIONS} this assembler will do"),
+            );
+        }
+
+        let counter = match op.args.get(1) {
+            Some(arg) => match arg.as_ident() {
+                Some(name) => Some(name.to_string()),
+                None => return state.error(arg.span, "expected a name for the counter"),
+            },
+            None => None,
+        };
+
+        for iteration in 0..count {
+            if let Some(name) = &counter {
+                if let Err(e) = self
+                    .symbols
+                    .define_variable(name, iteration, statement.span)
+                {
+                    state.report(e);
+                }
+            }
+            self.run(body, state);
             if state.finished {
                 return;
             }
-            self.statement(statement, state);
         }
     }
 
@@ -354,22 +627,30 @@ impl Assembler<'_> {
         }
         if let Some(label) = &statement.label {
             if let Err(e) = self.symbols.define_label(label, state.address, state.seq) {
-                state.diagnostics.push(e);
+                state.report(e);
             }
         }
 
         let start = state.address;
         let before = state.emitted;
-        self.directive_or_instruction(statement, &name, args, span, state);
-        if state.emitted > before {
+        let records_its_own_bytes =
+            self.directive_or_instruction(statement, &name, args, span, state);
+        // A macro call and an `INCLUDE` emit bytes, but through statements that
+        // record themselves. Recording the enclosing statement as well would
+        // give the listing overlapping entries and the debug info two answers
+        // for one address.
+        if records_its_own_bytes && state.emitted > before {
             state.lines.push(LineRecord {
                 span,
                 address: (start & 0xFFFF) as u16,
                 length: (state.emitted - before) as u16,
+                expansion: state.expanding.last().copied(),
             });
         }
     }
 
+    /// Returns whether this statement is the one that should be recorded as
+    /// having produced the bytes it emitted.
     fn directive_or_instruction(
         &mut self,
         statement: &Statement,
@@ -377,7 +658,7 @@ impl Assembler<'_> {
         args: &[Expr],
         span: Span,
         state: &mut State,
-    ) {
+    ) -> bool {
         match name {
             "" => {}
             "org" => {
@@ -393,11 +674,23 @@ impl Assembler<'_> {
             "dw" | "defw" | "word" => self.words(args, state),
             "module" => self.enter_module(args, span, state),
             "endmodule" | "endmod" => self.symbols.leave_module(),
-            "include" => self.include(args, span, state),
+            "include" => {
+                self.include(args, span, state);
+                return false;
+            }
             "incbin" => self.incbin(args, span, state),
             "end" => state.finished = true,
-            _ => self.instruction(statement, state),
+            // A macro call and an instruction are the same shape, so this is
+            // where the parser's refusal to guess is finally answered.
+            _ => match state.macros.get(name).cloned() {
+                Some(definition) => {
+                    self.expand(&definition, statement, state);
+                    return false;
+                }
+                None => self.instruction(statement, state),
+            },
         }
+        true
     }
 
     fn instruction(&mut self, statement: &Statement, state: &mut State) {
@@ -407,7 +700,7 @@ impl Assembler<'_> {
         let plan = match encode::plan(op) {
             Ok(plan) => plan,
             Err(e) => {
-                state.diagnostics.push(e);
+                state.report(e);
                 return;
             }
         };
@@ -416,7 +709,7 @@ impl Assembler<'_> {
             Ok(bytes) => state.write(&bytes),
             Err(e) => {
                 if !e.is_forward_reference() {
-                    state.diagnostics.push(e.diagnostic());
+                    state.report(e.diagnostic());
                 }
                 state.address += length;
             }
@@ -471,7 +764,7 @@ impl Assembler<'_> {
             match fit_byte(value, arg.span) {
                 Ok(byte) => state.write(&[byte]),
                 Err(e) => {
-                    state.diagnostics.push(e.diagnostic());
+                    state.report(e.diagnostic());
                     state.write(&[0]);
                 }
             }
@@ -487,7 +780,7 @@ impl Assembler<'_> {
             match fit_word(value, arg.span) {
                 Ok(word) => state.write(&word.to_le_bytes()),
                 Err(e) => {
-                    state.diagnostics.push(e.diagnostic());
+                    state.report(e.diagnostic());
                     state.write(&[0, 0]);
                 }
             }
@@ -523,7 +816,7 @@ impl Assembler<'_> {
             }
         };
         if let Err(e) = result {
-            state.diagnostics.push(e);
+            state.report(e);
         }
     }
 
@@ -612,7 +905,7 @@ impl Assembler<'_> {
                 let name = self.map.file(*file).name().to_string();
                 diagnostic = diagnostic.with_related(*from, format!("`{name}` was included"));
             }
-            state.diagnostics.push(diagnostic);
+            state.report(diagnostic);
             return;
         }
 
@@ -722,10 +1015,92 @@ impl Assembler<'_> {
             Ok(value) => Some(value),
             Err(e) => {
                 if !e.is_forward_reference() {
-                    state.diagnostics.push(e.diagnostic());
+                    state.report(e.diagnostic());
                 }
                 None
             }
         }
+    }
+}
+
+/// The directive name a statement begins with, lower-cased and without a
+/// leading dot, or empty for a statement that is only a label.
+fn directive_name(statement: &Statement) -> String {
+    statement
+        .op
+        .as_ref()
+        .map(|op| op.name.trim_start_matches('.').to_ascii_lowercase())
+        .unwrap_or_default()
+}
+
+/// The index of the statement closing the block opened at `from`, honouring
+/// nesting.
+fn block_end(statements: &[Statement], from: usize) -> Option<usize> {
+    let mut depth = 1usize;
+    for (at, statement) in statements.iter().enumerate().skip(from + 1) {
+        match directive_name(statement).as_str() {
+            "macro" | "rept" | "dup" => depth += 1,
+            "endm" | "endmacro" | "endr" | "edup" => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(at);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Replace parameter names with the arguments given for them.
+///
+/// Arguments are substituted as expressions, keeping their own spans, so an
+/// error about a value points at the call that supplied it while the statement
+/// still points into the macro body.
+fn substitute_statement(statement: &Statement, bindings: &[(&str, &Expr)]) -> Statement {
+    let op = statement.op.as_ref().map(|op| crate::ast::Op {
+        name: op.name.clone(),
+        name_span: op.name_span,
+        args: op
+            .args
+            .iter()
+            .map(|arg| substitute(arg, bindings))
+            .collect(),
+        span: op.span,
+    });
+    Statement {
+        label: statement.label.clone(),
+        op,
+        span: statement.span,
+    }
+}
+
+fn substitute(expr: &Expr, bindings: &[(&str, &Expr)]) -> Expr {
+    match &expr.kind {
+        ExprKind::Ident(name) => match bindings.iter().find(|(parameter, _)| *parameter == &**name)
+        {
+            Some((_, argument)) => (*argument).clone(),
+            None => expr.clone(),
+        },
+        ExprKind::Paren(inner) => Expr::new(
+            ExprKind::Paren(Box::new(substitute(inner, bindings))),
+            expr.span,
+        ),
+        ExprKind::Unary { op, operand } => Expr::new(
+            ExprKind::Unary {
+                op: *op,
+                operand: Box::new(substitute(operand, bindings)),
+            },
+            expr.span,
+        ),
+        ExprKind::Binary { op, lhs, rhs } => Expr::new(
+            ExprKind::Binary {
+                op: *op,
+                lhs: Box::new(substitute(lhs, bindings)),
+                rhs: Box::new(substitute(rhs, bindings)),
+            },
+            expr.span,
+        ),
+        _ => expr.clone(),
     }
 }

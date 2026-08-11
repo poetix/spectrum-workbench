@@ -77,6 +77,13 @@ different questions — the round trip catches a wrong encoding, and running it
 catches an encoding that the disassembler agrees with and the hardware does
 not.
 
+Macros expand with positional arguments bound as expressions, so an argument can
+be a register or an addressing mode as easily as a number. Local labels inside a
+macro hang off a name unique to each expansion, and an error inside one points
+at the macro body, where the mistake is written, with a note per level naming
+the invocation that led there. `REPT`/`DUP` repeat a block, optionally naming
+their counter.
+
 The directives are there too: `ORG`, `ALIGN` and `DS` for layout, `DB`/`DW`/`DZ`
 for data, `EQU` and `DEFL`, `MODULE` scoping, `INCLUDE` and `INCBIN` — resolving
 paths against the including file's directory, and reporting an include cycle

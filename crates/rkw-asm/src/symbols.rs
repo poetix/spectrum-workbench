@@ -145,6 +145,19 @@ impl Symbols {
         }
     }
 
+    /// The label that `.local` names currently hang off.
+    ///
+    /// A macro expansion replaces this with a name unique to the expansion, so
+    /// that the same `.loop` written once in a macro body is a different symbol
+    /// every time the macro is used.
+    pub fn local_scope(&self) -> Option<String> {
+        self.last_global.clone()
+    }
+
+    pub fn set_local_scope(&mut self, scope: Option<String>) {
+        self.last_global = scope;
+    }
+
     pub fn enter_module(&mut self, name: &str) {
         self.modules.push(name.to_string());
     }

@@ -232,7 +232,7 @@ impl Parser {
         // `label = expr`, the one operation not written as a word.
         if self.cur().is(Sym::Eq) {
             self.advance();
-            let args = self.operand_list()?;
+            let args = self.operand_list(false)?;
             return Some(Op {
                 name: "=".into(),
                 name_span,
@@ -250,7 +250,12 @@ impl Parser {
         };
         let name = name.clone();
         self.advance();
-        let args = self.operand_list()?;
+        // `MACRO plot x,y` separates the macro's name from its first parameter
+        // with a space rather than a comma. It is the one statement in the
+        // language that does, so it is the one place the parser has to know a
+        // directive by name.
+        let separated = name.trim_start_matches('.').eq_ignore_ascii_case("macro");
+        let args = self.operand_list(separated)?;
         Some(Op {
             name,
             name_span,
@@ -260,12 +265,17 @@ impl Parser {
     }
 
     /// Comma-separated operands, up to the end of the statement.
-    fn operand_list(&mut self) -> Option<Vec<Expr>> {
+    ///
+    /// `space_after_first` allows the comma after the first operand to be
+    /// omitted, which only `MACRO` needs.
+    fn operand_list(&mut self, space_after_first: bool) -> Option<Vec<Expr>> {
         let mut args = Vec::new();
         if !self.at_statement_end() {
             loop {
                 args.push(self.expr()?);
-                if !self.eat(Sym::Comma) {
+                let separated = self.eat(Sym::Comma)
+                    || (space_after_first && args.len() == 1 && !self.at_statement_end());
+                if !separated {
                     break;
                 }
             }
