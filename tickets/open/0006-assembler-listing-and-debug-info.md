@@ -23,5 +23,10 @@ debugger needs to map addresses back to source.
 
 ## Notes
 
+Ticket 0004 deferred its sidecar criterion here, and left the raw material:
+`Assembled::lines` is one `LineRecord` per statement that emitted bytes, with
+the span (so file, line and column) plus address and length. What is missing is
+the format, the reverse index, and the macro expansion records.
+
 Source-to-address must be one-to-many: a line inside a macro used five times
 generates five addresses, and "set a breakpoint on this line" should set five.

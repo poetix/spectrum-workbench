@@ -44,6 +44,7 @@
 //! //   = note: unclosed `(` at bad.asm:1:10
 //! ```
 
+pub mod assemble;
 pub mod ast;
 pub mod diag;
 pub mod encode;
@@ -55,6 +56,7 @@ pub mod parse;
 pub mod source;
 pub mod symbols;
 
+pub use assemble::{Assembled, Image, LineRecord, Segment, assemble};
 pub use ast::{BinOp, Expr, ExprKind, Label, LabelKind, Op, Program, Statement, UnOp};
 pub use diag::{Diagnostic, Severity};
 pub use encode::{EncodeError, Plan, encode, plan};

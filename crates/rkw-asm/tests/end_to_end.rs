@@ -8,8 +8,8 @@
 
 mod common;
 
-use common::assemble;
-use rkw_asm::SourceMap;
+use common::assemble_ok;
+use rkw_asm::Assembled;
 use z80::{Cpu, FlatMemory};
 
 /// Where the caller "returns to": running stops when the program's final `RET`
@@ -22,21 +22,15 @@ struct Machine {
 }
 
 /// Assemble, load, and run until the program returns.
-fn run(source: &str) -> (Machine, rkw_asm::Symbols) {
-    let mut map = SourceMap::new();
-    let file = map.add("program.asm", source);
-    let assembled = assemble(&map, file);
-    assert!(
-        assembled.errors.is_empty(),
-        "did not assemble:\n{}",
-        map.render_all(&assembled.errors)
-    );
+fn run(source: &str) -> (Machine, Assembled) {
+    let (_, assembled) = assemble_ok(source);
+    let origin = assembled.image.origin().expect("something was assembled");
 
     let mut memory = FlatMemory::new();
-    memory.load(assembled.origin, &assembled.bytes);
+    memory.load(origin, &assembled.image.to_binary());
 
     let mut cpu = Cpu::new();
-    cpu.regs.pc = assembled.origin;
+    cpu.regs.pc = origin;
     // A return address on the stack, so the program's own `RET` is what stops
     // the run rather than a step count.
     cpu.regs.sp = 0xFF00;
@@ -45,7 +39,7 @@ fn run(source: &str) -> (Machine, rkw_asm::Symbols) {
 
     for _ in 0..100_000 {
         if cpu.regs.pc == RETURN_TO {
-            return (Machine { cpu, memory }, assembled.symbols);
+            return (Machine { cpu, memory }, assembled);
         }
         cpu.step(&mut memory);
     }
@@ -75,13 +69,8 @@ table:  db 1,2,3,4,5
 count   equ 5
 total:  db 0
 ";
-    let (machine, mut symbols) = run(source);
-    let total = symbols
-        .iter_values()
-        .into_iter()
-        .find(|(name, _)| name == "total")
-        .expect("total is defined")
-        .1;
+    let (machine, mut assembled) = run(source);
+    let total = common::symbol(&mut assembled, "total");
 
     assert_eq!(peek(&machine, total), 15);
     assert_eq!(machine.cpu.regs.a, 15);
@@ -104,26 +93,13 @@ length  equ $-source
 destination:
         ds 5
 ";
-    let (machine, mut symbols) = run(source);
-    let destination = symbols
-        .iter_values()
-        .into_iter()
-        .find(|(name, _)| name == "destination")
-        .expect("destination is defined")
-        .1;
+    let (machine, mut assembled) = run(source);
+    let destination = common::symbol(&mut assembled, "destination");
 
     let copied: Vec<u8> = (0..5).map(|i| peek(&machine, destination + i)).collect();
     assert_eq!(copied, b"HELLO");
     // `$-source` is how a source measures itself, and it has to come out as 5.
-    assert_eq!(
-        symbols
-            .iter_values()
-            .into_iter()
-            .find(|(name, _)| name == "length")
-            .expect("length is defined")
-            .1,
-        5
-    );
+    assert_eq!(common::symbol(&mut assembled, "length"), 5);
 }
 
 #[test]
@@ -141,13 +117,8 @@ size    equ 1
 total   equ 2
 record: db 7,9,0
 ";
-    let (machine, mut symbols) = run(source);
-    let record = symbols
-        .iter_values()
-        .into_iter()
-        .find(|(name, _)| name == "record")
-        .expect("record is defined")
-        .1;
+    let (machine, mut assembled) = run(source);
+    let record = common::symbol(&mut assembled, "record");
 
     assert_eq!(peek(&machine, record + 2), 16);
     assert_eq!(machine.cpu.regs.a, 16);

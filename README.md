@@ -77,6 +77,13 @@ different questions — the round trip catches a wrong encoding, and running it
 catches an encoding that the disassembler agrees with and the hardware does
 not.
 
+The directives are there too: `ORG`, `ALIGN` and `DS` for layout, `DB`/`DW`/`DZ`
+for data, `EQU` and `DEFL`, `MODULE` scoping, `INCLUDE` and `INCBIN` — resolving
+paths against the including file's directory, and reporting an include cycle
+with the chain that produced it — and nested conditional assembly. A conditional
+on a forward reference is decided on the pass after the one that could not see
+it, which is the fixpoint earning its keep.
+
 Behind the front end are expression evaluation and the symbol table: 32-bit
 arithmetic with sjasmplus's operator set, labels both global and local,
 `MODULE` scoping, numeric temporary labels, and constants resolved on demand so

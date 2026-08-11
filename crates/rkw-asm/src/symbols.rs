@@ -97,6 +97,10 @@ pub struct Symbols {
     last_global: Option<String>,
     pass: u32,
     changed: bool,
+    /// The names whose value differed from the previous pass, so that a source
+    /// that will not settle can say what is still moving rather than only that
+    /// something is.
+    unsettled: Vec<String>,
 }
 
 impl Symbols {
@@ -117,6 +121,11 @@ impl Symbols {
         !self.changed
     }
 
+    /// The names that moved during the pass just finished.
+    pub fn unsettled(&self) -> &[String] {
+        &self.unsettled
+    }
+
     /// Start the next pass over the source. Definitions are kept — that is what
     /// makes forward references resolvable second time round — but constants go
     /// back to being unevaluated, since the labels they are computed from may
@@ -124,6 +133,7 @@ impl Symbols {
     pub fn begin_pass(&mut self) {
         self.pass += 1;
         self.changed = false;
+        self.unsettled.clear();
         self.modules.clear();
         self.last_global = None;
         self.temps_previous = std::mem::take(&mut self.temps);
@@ -186,6 +196,28 @@ impl Symbols {
         self.define(key, Binding::Label(address), SymbolKind::Label, label.span)
     }
 
+    /// Define a variable: `DEFL` or `=`.
+    ///
+    /// Evaluated by the caller and stored as a value, not as an expression,
+    /// which is the whole point of the form — `count DEFL count+1` reads the
+    /// value the name had a moment ago, and would be a cycle if it were held
+    /// as an expression like `EQU` is.
+    ///
+    /// A variable's value is a function of how far the pass has got, so it
+    /// takes no part in deciding whether the assembly has settled.
+    pub fn define_variable(
+        &mut self,
+        name: &str,
+        value: i64,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        let key = self.qualify(name);
+        if !name.starts_with('.') {
+            self.last_global = Some(key.clone());
+        }
+        self.define(key, Binding::Label(value), SymbolKind::Variable, span)
+    }
+
     /// Define a constant. `redefinable` distinguishes `=` and `DEFL`, which may
     /// be assigned again later in the same pass, from `EQU`, which may not.
     pub fn define_const(
@@ -235,21 +267,26 @@ impl Symbols {
                 // Only labels are compared here: a constant has no value until
                 // something asks for it, so whether it moved is decided in
                 // `lookup` instead.
+                let mut moved = false;
                 if let Binding::Label(address) = binding {
-                    if existing.previous != Some(address) {
-                        self.changed = true;
-                    }
+                    // Variables are excluded: their value depends on how far
+                    // the pass has got, so comparing one against the previous
+                    // pass would report a change on every pass.
+                    moved = kind == SymbolKind::Label && existing.previous != Some(address);
                     existing.latest = Some(address);
                 }
                 existing.binding = binding;
                 existing.kind = kind;
                 existing.defined_on = self.pass;
                 existing.span = span;
+                if moved {
+                    self.note_change(&key);
+                }
             }
             None => {
                 // A name that did not exist last pass is a change by itself:
                 // something that referred to it saw a forward reference.
-                self.changed = true;
+                self.note_change(&key);
                 let latest = match binding {
                     Binding::Label(address) => Some(address),
                     Binding::Const { .. } => None,
@@ -278,10 +315,11 @@ impl Symbols {
             .get(&id)
             .and_then(|prev| prev.get(index))
             .map(|&(_, v)| v);
-        if previous != Some(value) {
-            self.changed = true;
-        }
+        let moved = previous != Some(value);
         entries.push((seq, value));
+        if moved {
+            self.note_change(&format!("{id}:"));
+        }
     }
 
     /// True if `name` has a definition, whether or not it can be evaluated.
@@ -328,8 +366,9 @@ impl Symbols {
                     *state = ConstState::Done(value);
                 }
                 symbol.latest = Some(value);
-                if symbol.previous != Some(value) {
-                    self.changed = true;
+                let moved = symbol.previous != Some(value);
+                if moved {
+                    self.note_change(&key);
                 }
                 Ok(value)
             }
@@ -394,6 +433,13 @@ impl Symbols {
             }
         }
         None
+    }
+
+    fn note_change(&mut self, name: &str) {
+        self.changed = true;
+        if !self.unsettled.iter().any(|seen| seen == name) {
+            self.unsettled.push(name.to_string());
+        }
     }
 
     /// Whether an unknown name is a forward reference or a mistake. On the

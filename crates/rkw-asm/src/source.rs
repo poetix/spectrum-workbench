@@ -11,6 +11,8 @@
 //! at the moment something is printed. [`SourceMap::location`] recovers it then,
 //! from a line-start index built once per file.
 
+use std::path::{Path, PathBuf};
+
 /// A file registered with a [`SourceMap`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FileId(u32);
@@ -66,6 +68,11 @@ impl Span {
 /// One registered file: its name, its text, and the offset of each line start.
 pub struct SourceFile {
     name: String,
+    /// Where it was read from, if it was read from anywhere. `INCLUDE` and
+    /// `INCBIN` resolve their paths against the *including* file's directory
+    /// rather than the process working directory, so a source tree can be
+    /// assembled from anywhere.
+    path: Option<PathBuf>,
     text: String,
     /// Byte offset of the start of each line. Always begins with 0, so the
     /// number of entries is the number of lines.
@@ -75,6 +82,15 @@ pub struct SourceFile {
 impl SourceFile {
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
+    /// The directory a relative path in this file should be resolved against.
+    pub fn directory(&self) -> Option<&Path> {
+        self.path.as_deref().and_then(Path::parent)
     }
 
     pub fn text(&self) -> &str {
@@ -122,6 +138,22 @@ impl SourceMap {
 
     /// Register a file and return its id.
     pub fn add(&mut self, name: impl Into<String>, text: impl Into<String>) -> FileId {
+        self.add_at(name, None, text)
+    }
+
+    /// Read a file from disk and register it under its path.
+    pub fn load(&mut self, path: impl AsRef<Path>) -> std::io::Result<FileId> {
+        let path = path.as_ref();
+        let text = std::fs::read_to_string(path)?;
+        Ok(self.add_at(path.display().to_string(), Some(path.to_path_buf()), text))
+    }
+
+    fn add_at(
+        &mut self,
+        name: impl Into<String>,
+        path: Option<PathBuf>,
+        text: impl Into<String>,
+    ) -> FileId {
         let text: String = text.into();
         let mut line_starts = vec![0u32];
         line_starts.extend(
@@ -137,6 +169,7 @@ impl SourceMap {
         }
         self.files.push(SourceFile {
             name: name.into(),
+            path,
             text,
             line_starts,
         });
