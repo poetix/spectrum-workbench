@@ -10,9 +10,9 @@ ROM with tape loading and saving, screen output and sound.
 **Status: early.** The CPU core and disassembler are complete and validated, and
 the assembler is finished: it turns source into Z80 machine code that runs on
 it, with macros, conditional assembly, a listing and debug information. The
-debugger core is there too — breakpoints, watchpoints, stepping, and the
-emulation thread it all runs on — but nothing drives it yet, and nothing runs a
-Spectrum yet.
+debugger works — breakpoints, watchpoints, stepping, and a gdb-style REPL that
+assembles a file and runs it — but nothing runs a Spectrum yet, so there is no
+screen, no keyboard and no tape.
 
 ## What works
 
@@ -133,12 +133,65 @@ T-state rather than at a wall-clock moment, so a recorded command log replays to
 the same machine, byte for byte, which is the difference between "it crashed
 after I poked that byte" and a test.
 
+Above that is the command layer, which is three parts and not two: a parser
+producing command values, an executor returning structured results, and a
+formatter that turns those into text. A front end can take the first two and
+none of the third, which is what a DAP adapter will do (ADR-0016); the executor
+never returns a `String` where it could return a value, and the parser and the
+formatter are both tested without an emulator anywhere near them.
+
+### Driving it
+
+`rkwdbg` is the terminal front end: it assembles a source file, loads it, and
+gives you a gdb-style prompt.
+
+```sh
+cargo run -p rkw-cli -- program.asm
+```
+
+```text
+(rkw) break $8007 if a == $43
+Breakpoint 1 at $8007 if a == $43
+(rkw) continue
+Breakpoint 1 at $8007
+=> 8007  77           LD (HL),A
+   T=84 after 11 instructions
+(rkw) regs
+AF=4301 [-------C]  BC=02FF  DE=FFFF  HL=800F
+AF'=FFFF [SZYHXPNC] BC'=FFFF  DE'=FFFF  HL'=FFFF
+IX=FFFF  IY=FFFF  SP=FF00  PC=8007  WZ=8007
+I=00  R=0B  IM0  IFF1=0  IFF2=0  Q=00
+T=84 after 11 instructions
+(rkw) x/8 hl
+$800F  00 00 00 00 00 00 00 00                          |........|
+```
+
+The commands are gdb's where gdb has them — `break`, `delete`, `step`, `next`,
+`finish`, `continue`, `until`, `x`, `disas`, `info breakpoints`, `watch`,
+`rwatch`, `awatch` — with `regs`, `trace`, `reset`, `poke` and `pwatch` for the
+things a Z80 has that gdb's targets do not. `help` lists them all. Breakpoint
+conditions are written `break $8000 if a > 1 && [hl] == 0`, memory in a
+condition is `[hl]` so that parentheses can go on meaning grouping, and a flag
+is `f.z` rather than `z` because `c` is already a register.
+
+A file of commands can be replayed, which is what makes the debugger a test
+harness for the assembler: assemble, run to somewhere, look at a register.
+
+```sh
+rkwdbg program.asm --batch -x check.rkw
+```
+
+`--batch` exits non-zero if any command failed, so a script is a test. Source
+lines and labels are not addresses yet — that is ticket 0011, and until then
+`break main` says so rather than guessing.
+
 ## Layout
 
 ```text
 crates/
   rkw-asm/        macro assembler: complete
-  rkw-debug/      debugger core, emulation thread and channels
+  rkw-cli/        rkwdbg: the terminal front end
+  rkw-debug/      debugger core, emulation thread, command layer
   z80/            CPU core and disassembler
 adr/              architecture decision records
 docs/
@@ -151,8 +204,8 @@ scripts/
   fetch-testdata.sh
 ```
 
-Planned: `rkw-spectrum` (ULA, memory map, tape), `rkw-cli`, `rkw-dap` (Debug
-Adapter Protocol front end), `rkw-gui`.
+Planned: `rkw-spectrum` (ULA, memory map, tape), `rkw-dap` (Debug Adapter
+Protocol front end), `rkw-gui`.
 
 ## Design
 

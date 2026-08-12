@@ -440,6 +440,8 @@ impl<M: Machine> Emu<M> {
             // The raw accessor, not a machine cycle: a poke is the debugger
             // writing, and nothing in the machine should be able to tell.
             Command::Poke { addr, value } => self.machine.write(addr, value),
+            Command::Reset => self.cpu.reset(),
+            Command::SetPc(addr) => self.cpu.regs.pc = addr,
             Command::Quit => self.shared.set_stop(StopReason::Paused, RunState::Exited),
         }
         self.applied += 1;

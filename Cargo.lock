@@ -20,6 +20,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rkw-cli"
+version = "0.1.0"
+dependencies = [
+ "rkw-asm",
+ "rkw-debug",
+ "z80",
+]
+
+[[package]]
 name = "rkw-debug"
 version = "0.1.0"
 dependencies = [

@@ -46,6 +46,13 @@ pub enum Command {
     ClearAll,
     /// Write a byte into memory without the machine noticing an access.
     Poke { addr: u16, value: u8 },
+    /// Reset the CPU. Not a power-on: the register file survives, as it does
+    /// on real hardware.
+    Reset,
+    /// Put the program counter somewhere. A debugger moving `PC` is an input
+    /// the machine could not have worked out for itself, so it goes through
+    /// here rather than being written behind the log's back.
+    SetPc(u16),
     /// Stop the thread. It hands the machine back when it is joined.
     Quit,
 }
@@ -63,6 +70,8 @@ const UNWATCH: u64 = 10;
 const CLEAR_ALL: u64 = 11;
 const POKE: u64 = 12;
 const QUIT: u64 = 13;
+const RESET: u64 = 14;
+const SET_PC: u64 = 15;
 
 /// A command and the T-state at which the emulation thread applied it.
 ///
@@ -96,6 +105,8 @@ impl Record for Command {
             Command::Unwatch(addr) => UNWATCH | u64::from(addr) << 8,
             Command::ClearAll => CLEAR_ALL,
             Command::Poke { addr, value } => POKE | u64::from(addr) << 8 | u64::from(value) << 24,
+            Command::Reset => RESET,
+            Command::SetPc(addr) => SET_PC | u64::from(addr) << 8,
             Command::Quit => QUIT,
         };
         [word, 0]
@@ -125,6 +136,8 @@ impl Record for Command {
             UNWATCH => Some(Command::Unwatch(addr)),
             CLEAR_ALL => Some(Command::ClearAll),
             POKE => Some(Command::Poke { addr, value }),
+            RESET => Some(Command::Reset),
+            SET_PC => Some(Command::SetPc(addr)),
             QUIT => Some(Command::Quit),
             _ => None,
         }
@@ -165,6 +178,8 @@ mod tests {
             addr: 0x5C00,
             value: 0xA5,
         },
+        Command::Reset,
+        Command::SetPc(0x8000),
         Command::Quit,
     ];
 

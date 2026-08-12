@@ -1,0 +1,20 @@
+[package]
+name = "rkw-cli"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "gdb-style REPL over the debugger's command layer"
+
+[[bin]]
+name = "rkwdbg"
+path = "src/main.rs"
+
+[dependencies]
+rkw-asm = { path = "../rkw-asm" }
+rkw-debug = { path = "../rkw-debug" }
+z80 = { path = "../z80" }
+
+[lints]
+workspace = true

@@ -5,8 +5,15 @@
 //! runs per instruction and per memory access, and the four ways of moving
 //! that are not "run": step, step over, step out, run to cursor. It also owns
 //! the emulation thread those movements run on ([`Emu`]) and the three
-//! channels of ADR-0007 that connect it to whatever is driving. The command
-//! layer and the REPL (ticket 0010) sit on top.
+//! channels of ADR-0007 that connect it to whatever is driving.
+//!
+//! On top of that sits [`cmd`], the command layer: a parser producing
+//! [`Request`] values, an executor returning structured [`Outcome`]s, and a
+//! formatter that turns those into terminal text. Those three are kept apart so
+//! that a front end can take the first two and none of the third — a REPL runs
+//! all three, and `rkw-dap` will run parse and execute and serialise the result
+//! (ADR-0016). The terminal shell over it is the `rkw-cli` crate, and it is
+//! thin on purpose.
 //!
 //! # What it needs from a machine
 //!
@@ -43,6 +50,7 @@
 mod bitmap;
 pub mod breakpoints;
 mod bus;
+pub mod cmd;
 pub mod command;
 pub mod condition;
 pub mod emu;
@@ -52,6 +60,7 @@ pub mod ring;
 
 pub use bitmap::Bitmap;
 pub use breakpoints::{Access, Breakpoint, Breakpoints, Id, PortAccess, PortWatch, Watchpoint};
+pub use cmd::{Outcome, Request, Session};
 pub use command::{Command, Stamped};
 pub use condition::{Cmp, Condition, Operand};
 pub use emu::{Config, Emu, Handle, RunState, spawn};
