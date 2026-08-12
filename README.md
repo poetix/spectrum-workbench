@@ -9,8 +9,10 @@ ROM with tape loading and saving, screen output and sound.
 
 **Status: early.** The CPU core and disassembler are complete and validated, and
 the assembler is finished: it turns source into Z80 machine code that runs on
-it, with macros, conditional assembly, a listing and debug information. Nothing
-runs a Spectrum yet.
+it, with macros, conditional assembly, a listing and debug information. The
+debugger core is there too — breakpoints, watchpoints, stepping, and the
+emulation thread it all runs on — but nothing drives it yet, and nothing runs a
+Spectrum yet.
 
 ## What works
 
@@ -109,11 +111,34 @@ which on the Z80 is cheaper than it sounds: instruction size is a function of
 the parse tree alone, so only `DS`, `ALIGN` and conditional assembly can move an
 address once a forward reference resolves.
 
+### The debugger
+
+`rkw-debug` is the debugger as a library, with no user interface in it at all
+(ADR-0013). It owns breakpoints, watchpoints and port watches, the four ways of
+moving that are not "run" — step, step over, step out, run to cursor — and the
+emulation thread they run on.
+
+What is armed is asked about in three tiers (ADR-0008), each reached only if the
+last said maybe: a `bool`, then a bit in an 8 KB bitmap, then the map that says
+what is actually there. Conditions, hit counts and ignore counts live in the
+third tier, so they cost nothing until something fires. Measured, attaching the
+debugger and arming breakpoints that never fire are both free.
+
+The machine runs on its own thread in slices bounded by a T-state deadline, with
+the three channels of ADR-0007: a lossy event ring that never blocks the
+emulator, a stop published as a state transition because a missed breakpoint is
+a broken debugger, and a lossless command queue drained once per scanline. That
+last one is what makes a session reproducible — a command is applied at a
+T-state rather than at a wall-clock moment, so a recorded command log replays to
+the same machine, byte for byte, which is the difference between "it crashed
+after I poked that byte" and a test.
+
 ## Layout
 
 ```text
 crates/
   rkw-asm/        macro assembler: complete
+  rkw-debug/      debugger core, emulation thread and channels
   z80/            CPU core and disassembler
 adr/              architecture decision records
 docs/
@@ -126,8 +151,8 @@ scripts/
   fetch-testdata.sh
 ```
 
-Planned: `rkw-debug` (debugger core), `rkw-spectrum` (ULA, memory map, tape),
-`rkw-cli`, `rkw-dap` (Debug Adapter Protocol front end), `rkw-gui`.
+Planned: `rkw-spectrum` (ULA, memory map, tape), `rkw-cli`, `rkw-dap` (Debug
+Adapter Protocol front end), `rkw-gui`.
 
 ## Design
 

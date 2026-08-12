@@ -49,6 +49,8 @@ mod common;
 use std::time::Instant;
 
 use common::machine;
+use rkw_debug::command::Command;
+use rkw_debug::emu::{Config, Emu};
 use rkw_debug::{Debugger, StopReason};
 use z80::{Cpu, FlatMemory};
 
@@ -151,5 +153,89 @@ fn the_debugger_costs_almost_nothing_when_nothing_fires() {
         watched_rate > bare_rate * 0.5,
         "watching the bus cost more than wrapping it should: \
          {bare_rate:.1} -> {watched_rate:.1}"
+    );
+}
+
+/// T-states rather than instructions, because the slice loop is paced by the
+/// clock and the two units are not interchangeable.
+const T_STATES: u64 = 700_000_000;
+
+/// Run in one go, as a baseline: the same work with the control tick taken
+/// out.
+fn free_running(target: u64) -> f64 {
+    let (mut cpu, mut mem) = machine(BUSY);
+    let mut dbg = Debugger::new();
+    let start = Instant::now();
+    while mem.t < target {
+        dbg.resume(&mut cpu, &mut mem, 100_000);
+    }
+    mhz(mem.t, start, &cpu, &mem)
+}
+
+/// Run the same work through the slice loop, draining an empty command ring
+/// at every tick.
+fn sliced(target: u64, interval: u64) -> f64 {
+    let (cpu, mem) = machine(BUSY);
+    let (mut emu, mut handle) = Emu::new(
+        cpu,
+        mem,
+        Debugger::new(),
+        Config {
+            control_interval: interval,
+            ..Config::default()
+        },
+    );
+    handle.send(Command::Resume).unwrap();
+    let start = Instant::now();
+    while emu.machine.t < target {
+        emu.slice();
+    }
+    mhz(emu.machine.t, start, &emu.cpu, &emu.machine)
+}
+
+/// Emulated megahertz: how fast the machine's own clock runs.
+fn mhz(t: u64, start: Instant, cpu: &Cpu, mem: &FlatMemory) -> f64 {
+    let elapsed = start.elapsed().as_secs_f64();
+    std::hint::black_box((cpu.regs.hl(), mem.ram[0x9000]));
+    t as f64 / elapsed / 1e6
+}
+
+/// What handing control back once per scanline costs.
+///
+/// ADR-0007 puts the figure at under 1%, on the grounds that a slice boundary
+/// is a comparison the loop needs anyway and a drain of an empty ring is two
+/// atomic loads. This is that claim, measured. The scanline column is the one
+/// that matters; the others are there to show the shape — the cost is per
+/// tick, so it only becomes visible when the ticks are absurdly close
+/// together.
+///
+/// The measured figures have the sliced loop a few percent *ahead* of the
+/// free-running one, which is the inlining effect described at the top of this
+/// file rather than slicing being free money. Read the assertions as bounds:
+/// what they rule out is a control tick that costs something worth naming.
+#[test]
+#[ignore = "a timing measurement; use --release --nocapture"]
+fn slicing_at_scanline_granularity_costs_almost_nothing() {
+    free_running(T_STATES / 10);
+
+    let free = best(|| free_running(T_STATES));
+    let scanline = best(|| sliced(T_STATES, 224));
+    let frame = best(|| sliced(T_STATES, 69_888));
+    let tight = best(|| sliced(T_STATES, 16));
+
+    println!("free running                {free:8.1} emulated MHz");
+    println!("sliced per frame            {frame:8.1} emulated MHz");
+    println!("sliced per scanline         {scanline:8.1} emulated MHz");
+    println!("sliced every 16 T-states    {tight:8.1} emulated MHz");
+    println!("real Spectrum                    3.5 emulated MHz");
+
+    assert!(
+        scanline > free * 0.97,
+        "a control tick per scanline cost more than a few percent: \
+         {free:.1} -> {scanline:.1}"
+    );
+    assert!(
+        frame > free * 0.97,
+        "a control tick per frame cost anything at all: {free:.1} -> {frame:.1}"
     );
 }

@@ -12,6 +12,8 @@
 mod common;
 
 use common::machine;
+use rkw_debug::command::Command;
+use rkw_debug::emu::{Config, Emu, RunState};
 use rkw_debug::{Debugger, StopReason};
 
 #[global_allocator]
@@ -89,4 +91,60 @@ fn stopping_does_not_allocate_either() {
         "and this is the path that consults it from the bus: {stop:?}"
     );
     assert_eq!(allocations, 0);
+}
+
+/// The slice loop of ADR-0007, which is what the emulation thread actually
+/// runs: draining commands, stamping them into the log, pushing events, and
+/// running to a deadline.
+///
+/// The commands here are the ones that do not arm anything. Arming inserts
+/// into a `HashMap` and is allowed to allocate, as above — it happens when a
+/// person types. What must not is the part that happens thousands of times a
+/// second.
+#[test]
+fn the_slice_loop_does_not_allocate() {
+    let (cpu, mem) = machine(BUSY);
+    let mut dbg = Debugger::new();
+    // Armed at addresses the program never reaches, so the bitmaps are
+    // consulted on every instruction and the map on none.
+    dbg.breakpoints.add_exec(0x4321);
+    dbg.breakpoints.watch_mem(0xA000, true, true);
+
+    let (mut emu, mut handle) = Emu::new(
+        cpu,
+        mem,
+        dbg,
+        Config {
+            event_capacity: 16,
+            command_capacity: 16,
+            control_interval: 224,
+            log_capacity: 64,
+        },
+    );
+    handle.send(Command::Resume).unwrap();
+
+    let (_, allocations) = alloc_check::count(|| {
+        for slice in 0..2_000u16 {
+            // Enough commands to wrap the log and to overflow both rings, so
+            // the drop paths are on the measured path too.
+            if slice % 4 == 0 {
+                handle
+                    .send(Command::Poke {
+                        addr: 0x9000 + (slice & 0xFF),
+                        value: slice as u8,
+                    })
+                    .expect("the ring is drained every slice");
+            }
+            assert_eq!(emu.slice(), RunState::Running);
+        }
+    });
+    assert_eq!(
+        allocations, 0,
+        "2000 slices allocated {allocations} times on the emulation thread"
+    );
+    // The events went somewhere: a loop that pushed nothing would have proved
+    // nothing about the ring.
+    assert!(handle.poll().is_some());
+    assert!(handle.dropped_events() > 0);
+    assert_eq!(emu.log().len(), 64);
 }

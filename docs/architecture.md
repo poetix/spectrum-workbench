@@ -70,7 +70,7 @@ ADR-0008.
 or 64 µs of emulated time. Draining an empty command ring is a single acquire
 load of the producer index — a couple of nanoseconds against roughly 160 ns of
 emulated work, so under 1% overhead, bounding command latency well below
-perception.
+perception. Measured below, and the 1% turned out to be pessimistic.
 
 **Trace volume.** Full instruction tracing at real-time speed is 432K records
 per second at 16 bytes each: 7 MB/s, which is nothing. At full uncapped speed
@@ -118,6 +118,43 @@ call site anywhere in the binary and both drop to about 165, a difference of
 without saying which regime it was measured in, and a benchmark that compares
 two loops in the same binary has already lost the effect for both. Comparisons
 here are therefore ratios measured within one binary.
+
+## What the slice loop turned out to cost
+
+Ticket 0009 built the loop of ADR-0007 and measured the control tick against a
+free-running loop doing the same work in one go, in T-states rather than
+instructions because the slice loop is paced by the clock
+(`slicing_at_scanline_granularity_costs_almost_nothing`).
+
+| | Emulated MHz | Against real time |
+| --- | --- | --- |
+| Free running | 1164 | 333× |
+| Sliced per frame (69,888 T) | 1243 | 355× |
+| Sliced per scanline (224 T) | 1225 | 350× |
+| Sliced every 16 T-states | 1091 | 312× |
+
+The scanline figure is not merely within a percent of free-running, it is
+above it — which is the inlining caution above, not slicing paying for itself.
+Read the row as a bound: a control tick per scanline costs nothing worth
+naming, and it takes a tick roughly every second instruction before the cost
+is visible at all. The 1% in ADR-0007 was an over-estimate.
+
+The other half of the loop's cost is per stop rather than per instruction, and
+is a store: publishing a stop is two relaxed stores of the reason, a release
+store of the run state and a release store of a counter, after which the thread
+parks.
+
+**Reading a ring the producer never waits for.** The event ring's producer
+cannot consult the consumer's index — that is what makes it non-blocking — so
+the consumer has to establish for itself that the record it just copied out was
+not being overwritten while it copied it. It re-reads the producer index after
+the copy, which is only sound with an acquire *fence* between the two: an
+acquire load orders what follows it, and what needs ordering here is what
+precedes it. Without the fence the relaxed reads of the record can be answered
+after the re-read of the index, so a stale record passes the check that exists
+to catch it. This is not theoretical — it reproduced within a hundred records
+on an M3, and the two-threaded test in `tests/ring.rs` exists because it did.
+See ADR-0018.
 
 ## Keeping the no-allocation rule testable
 

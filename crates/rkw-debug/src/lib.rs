@@ -3,10 +3,10 @@
 //! This crate knows about a CPU and a bus and nothing about a user interface
 //! (ADR-0013). It owns the breakpoint and watchpoint state, the check that
 //! runs per instruction and per memory access, and the four ways of moving
-//! that are not "run": step, step over, step out, run to cursor. The command
-//! layer and the REPL (ticket 0010) sit on top; the emulation thread and its
-//! channels (ticket 0009) will drive [`Debugger::resume`] with a deadline
-//! instead of an instruction budget.
+//! that are not "run": step, step over, step out, run to cursor. It also owns
+//! the emulation thread those movements run on ([`Emu`]) and the three
+//! channels of ADR-0007 that connect it to whatever is driving. The command
+//! layer and the REPL (ticket 0010) sit on top.
 //!
 //! # What it needs from a machine
 //!
@@ -43,11 +43,20 @@
 mod bitmap;
 pub mod breakpoints;
 mod bus;
+pub mod command;
 pub mod condition;
+pub mod emu;
+pub mod event;
+pub mod machine;
+pub mod ring;
 
 pub use bitmap::Bitmap;
 pub use breakpoints::{Access, Breakpoint, Breakpoints, Id, PortAccess, PortWatch, Watchpoint};
+pub use command::{Command, Stamped};
 pub use condition::{Cmp, Condition, Operand};
+pub use emu::{Config, Emu, Handle, RunState, spawn};
+pub use event::Event;
+pub use machine::{Clock, Machine};
 
 use breakpoints::Temporary;
 use bus::DebugBus;
@@ -82,8 +91,12 @@ pub enum StopReason {
     /// on would only burn the budget. A `HALT` with interrupts enabled is not
     /// a stop, because an interrupt is expected to arrive.
     Halted,
-    /// The instruction budget ran out. Not an error — it is how a caller keeps
-    /// control, and how the slice loop of ticket 0009 will hand back.
+    /// Someone asked the machine to stop. [`Command::Pause`], applied at the
+    /// control tick like every other command.
+    Paused,
+    /// The instruction budget ran out, or the slice reached its deadline. Not
+    /// an error — it is how a caller keeps control, and how [`Emu`] hands back
+    /// between slices without the movement in progress being abandoned.
     OutOfBudget,
 }
 
@@ -91,7 +104,10 @@ impl StopReason {
     /// True for the reasons a user asked for, as against the ones that
     /// happened to them.
     pub fn is_requested(self) -> bool {
-        matches!(self, StopReason::Step | StopReason::OutOfBudget)
+        matches!(
+            self,
+            StopReason::Step | StopReason::Paused | StopReason::OutOfBudget
+        )
     }
 }
 
@@ -139,6 +155,24 @@ impl Debugger {
         bus: &mut B,
         budget: u64,
     ) -> StopReason {
+        match self.begin_step_over(cpu, bus) {
+            Some(reason) => reason,
+            None => self.run(cpu, bus, budget),
+        }
+    }
+
+    /// The arming half of [`Debugger::step_over`]: `Some` if it is already
+    /// over, `None` if the machine now has to run to the temporary this left
+    /// behind.
+    ///
+    /// Split out because a slice loop cannot call a method that runs to
+    /// completion. What the two halves share is that arming happens between
+    /// runs, never mid-slice.
+    pub(crate) fn begin_step_over<B: Bus + Peek>(
+        &mut self,
+        cpu: &mut Cpu,
+        bus: &mut B,
+    ) -> Option<StopReason> {
         self.breakpoints.clear_temporaries();
         let d = decode(bus, cpu.regs.pc);
         let returns_here = d.next_addr();
@@ -146,16 +180,16 @@ impl Debugger {
 
         match d.flow {
             Flow::Call { .. } | Flow::Rst(_) | Flow::Repeat => {}
-            _ => return self.step(cpu, bus),
+            _ => return Some(self.step(cpu, bus)),
         }
 
         if let Some(reason) = self.step_one(cpu, bus) {
-            return reason;
+            return Some(reason);
         }
         if cpu.regs.pc == returns_here {
             // The call was conditional and not taken, or the block instruction
             // was on its last iteration.
-            return StopReason::Step;
+            return Some(StopReason::Step);
         }
 
         let guard = match d.flow {
@@ -167,7 +201,7 @@ impl Debugger {
             addr: returns_here,
             sp_at_least: guard,
         });
-        self.run(cpu, bus, budget)
+        None
     }
 
     /// Run until the current routine returns.
@@ -183,6 +217,12 @@ impl Debugger {
         bus: &mut B,
         budget: u64,
     ) -> StopReason {
+        self.begin_step_out(cpu, bus);
+        self.run(cpu, bus, budget)
+    }
+
+    /// The arming half of [`Debugger::step_out`].
+    pub(crate) fn begin_step_out<B: Bus + Peek>(&mut self, cpu: &mut Cpu, bus: &mut B) {
         self.breakpoints.clear_temporaries();
         let sp = cpu.regs.sp;
         let ret = u16::from_le_bytes([bus.peek(sp), bus.peek(sp.wrapping_add(1))]);
@@ -191,7 +231,6 @@ impl Debugger {
             // After the return, SP is two higher than it is now.
             sp_at_least: Some(sp.wrapping_add(2)),
         });
-        self.run(cpu, bus, budget)
     }
 
     /// Run until `addr` is reached, or something else stops first.
@@ -206,12 +245,17 @@ impl Debugger {
         addr: u16,
         budget: u64,
     ) -> StopReason {
+        self.begin_run_to(addr);
+        self.run(cpu, bus, budget)
+    }
+
+    /// The arming half of [`Debugger::run_to`].
+    pub(crate) fn begin_run_to(&mut self, addr: u16) {
         self.breakpoints.clear_temporaries();
         self.breakpoints.add_temporary(Temporary {
             addr,
             sp_at_least: None,
         });
-        self.run(cpu, bus, budget)
     }
 
     /// Run until something stops the machine or the budget runs out.
@@ -228,6 +272,28 @@ impl Debugger {
         self.run(cpu, bus, budget)
     }
 
+    /// Run until the machine's clock reaches `deadline`, or something stops it
+    /// first.
+    ///
+    /// This is what the emulation thread calls, once per slice (ADR-0007). It
+    /// arms nothing and clears nothing, because the movement it is continuing
+    /// was armed before the first slice: a step-over that takes a million
+    /// T-states is one arming and several thousand slices, and its landing
+    /// site has to survive every one of them.
+    ///
+    /// The deadline is a floor rather than an exact stop. Instructions are not
+    /// interruptible, so the last one of a slice runs past it by up to twenty
+    /// or so T-states, and the next slice's deadline is measured from where
+    /// the clock actually got to.
+    pub fn run_until<B: Bus + Peek + Clock>(
+        &mut self,
+        cpu: &mut Cpu,
+        bus: &mut B,
+        deadline: u64,
+    ) -> StopReason {
+        self.run_limited(cpu, bus, |bus: &B, _| bus.t_states() < deadline)
+    }
+
     /// The loop everything that moves ends up in.
     ///
     /// There are two of them, chosen once per run by whether anything is
@@ -241,10 +307,23 @@ impl Debugger {
     /// Deciding once per run is sound because arming happens between runs:
     /// commands are applied at the control tick, never mid-slice (ADR-0007).
     fn run<B: Bus + Peek>(&mut self, cpu: &mut Cpu, bus: &mut B, budget: u64) -> StopReason {
+        self.run_limited(cpu, bus, |_: &B, done| done < budget)
+    }
+
+    /// The same loop, with what ends it left to the caller: an instruction
+    /// count for a budgeted run, the clock for a slice. `more` is handed the
+    /// machine's own bus and the number of instructions run so far, and is
+    /// asked before each one.
+    fn run_limited<B: Bus + Peek, F: FnMut(&B, u64) -> bool>(
+        &mut self,
+        cpu: &mut Cpu,
+        bus: &mut B,
+        more: F,
+    ) -> StopReason {
         let reason = if self.breakpoints.bus_armed() {
-            self.run_watched(cpu, bus, budget)
+            self.run_watched(cpu, bus, more)
         } else {
-            self.run_unwatched(cpu, bus, budget)
+            self.run_unwatched(cpu, bus, more)
         };
         // A run that stopped abandons any pending step; one that merely ran
         // out of budget has not finished, and its landing site stays armed.
@@ -255,14 +334,16 @@ impl Debugger {
     }
 
     /// Nothing is watching the bus, so the CPU is handed the machine's own.
-    fn run_unwatched<B: Bus + Peek>(
+    fn run_unwatched<B: Bus + Peek, F: FnMut(&B, u64) -> bool>(
         &mut self,
         cpu: &mut Cpu,
         bus: &mut B,
-        budget: u64,
+        mut more: F,
     ) -> StopReason {
-        for _ in 0..budget {
+        let mut done = 0;
+        while more(bus, done) {
             let stop = cpu.step(bus);
+            done += 1;
             if let Some(reason) = between(&mut self.breakpoints, cpu, bus, stop) {
                 return reason;
             }
@@ -271,15 +352,17 @@ impl Debugger {
     }
 
     /// Something is watching the bus, so every access goes through the check.
-    fn run_watched<B: Bus + Peek>(
+    fn run_watched<B: Bus + Peek, F: FnMut(&B, u64) -> bool>(
         &mut self,
         cpu: &mut Cpu,
         bus: &mut B,
-        budget: u64,
+        mut more: F,
     ) -> StopReason {
         let mut dbus = DebugBus::new(bus, &mut self.breakpoints);
-        for _ in 0..budget {
+        let mut done = 0;
+        while more(dbus.split().1, done) {
             let stop = cpu.step(&mut dbus);
+            done += 1;
             if let Some(reason) = dbus.take_hit() {
                 return reason;
             }

@@ -8,6 +8,9 @@ repository.workspace = true
 description = "Debugger core: breakpoints, watchpoints and execution control for the z80 core"
 
 [dependencies]
+# Cache padding, per ADR-0010: the table is per target and belongs upstream,
+# not in a `#[repr(align(128))]` justified by this laptop's cache line.
+crossbeam-utils = "0.8"
 z80 = { path = "../z80" }
 
 [dev-dependencies]
