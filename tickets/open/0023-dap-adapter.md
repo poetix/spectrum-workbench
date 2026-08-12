@@ -26,6 +26,9 @@ register, memory, disassembly and source panes (ADR-0016).
       lines that generated nothing as unverified with a reason
 - [ ] `setInstructionBreakpoints` and `setDataBreakpoints` over the core's exec
       breakpoints and memory watchpoints
+- [ ] `supportsStepBack` reported honestly — only when the checkpoint ring is
+      configured — with `stepBack` and `reverseContinue` over 0028, and history
+      exhaustion surfaced as a `stopped` reason rather than a silent no-op
 - [ ] Breakpoint `condition` parsed by the same parser the REPL uses, into
       `rkw_debug::Condition`; `hitCondition` onto the ignore count
 - [ ] `stackTrace` built from the `expansion` parent chain — innermost expansion
@@ -51,6 +54,11 @@ register, memory, disassembly and source panes (ADR-0016).
 Depends on 0009 (command ring and stop notification), 0010 (command layer) and
 0011 (source-level resolution). The adapter should add no debugger capability of
 its own: anything it can do, the REPL can do.
+
+Reverse execution (0028) is not a prerequisite — the capability is advertised or
+not, and every DAP client handles its absence. It is listed here because
+`initialize` must report it correctly from the start: a client shown a step-back
+button that does nothing is worse than one that never had it.
 
 The fictions DAP requires — one thread, expansion frames, registers as variables
 — are listed in ADR-0016 and should be applied consistently rather than
