@@ -13,6 +13,7 @@
 use rkw_debug::Debugger;
 use rkw_debug::command::Command;
 use rkw_debug::emu::{Config, Emu, RunState};
+use rkw_spectrum::keymap::{HostKey, HostKeys, KeyMap};
 use rkw_spectrum::{Flash, Framebuffer, SCREEN_BASE, Spectrum};
 use z80::Cpu;
 
@@ -100,6 +101,41 @@ fn the_slice_loop_running_a_spectrum_does_not_allocate() {
         "the border never changed, so the log was never exercised"
     );
     assert!(emu.cpu.regs.i == 0 && emu.cpu.regs.iff1);
+}
+
+/// Key events arrive on whatever thread the frontend runs on and are applied
+/// on the emulation thread (0026), and rebuilding the matrix from the host
+/// keys held is what happens at that end. Fixed arrays throughout, which is
+/// what [`rkw_spectrum::keymap::MAX_HELD`] exists for; this is the assertion
+/// that says so.
+#[test]
+fn turning_host_key_events_into_a_matrix_does_not_allocate() {
+    let mut host = HostKeys::new();
+    let mut machine = Spectrum::new();
+
+    let (held, allocations) = alloc_check::count(|| {
+        let mut held = 0;
+        for c in "the quick brown fox".chars() {
+            let key = if c == ' ' {
+                HostKey::Space
+            } else {
+                HostKey::Char(c)
+            };
+            host.press(HostKey::Shift);
+            host.press(key);
+            machine.ula.keyboard = host.matrix(&KeyMap::PC);
+            held += usize::from(machine.ula.keyboard.any_pressed());
+            host.release(key);
+            host.release(HostKey::Shift);
+            machine.ula.keyboard = host.matrix(&KeyMap::PC);
+        }
+        held
+    });
+    assert_eq!(allocations, 0, "key events allocated {allocations} times");
+    // The run did what it was supposed to: every character put keys down, and
+    // letting go put them all back up.
+    assert_eq!(held, "the quick brown fox".len());
+    assert_eq!(machine.ula.keyboard, rkw_spectrum::Keyboard::new());
 }
 
 #[test]

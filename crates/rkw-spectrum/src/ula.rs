@@ -1,11 +1,20 @@
 //! The ULA: the frame clock, the interrupt, the border and port `0xFE`.
 //!
-//! The ULA is the whole of the Spectrum that is not the Z80 and the RAM. This
-//! module is the part of it that ticket 0012 needs: what time it is within the
-//! frame, the 50 Hz interrupt that starts each one, the flash cadence, and the
-//! border colour. The keyboard half of port `0xFE` is ticket 0013, the speaker
-//! bit is 0014, and contention is 0020 — all three read state this already
-//! keeps.
+//! The ULA is the whole of the Spectrum that is not the Z80 and the RAM: what
+//! time it is within the frame, the 50 Hz interrupt that starts each one, the
+//! flash cadence, the border colour, and both halves of port `0xFE` — the byte
+//! written, whose low three bits are the border, and the byte read, which is
+//! the keyboard and the `EAR` line. The speaker is 0014 and contention is 0020;
+//! both read state this already keeps.
+//!
+//! # Port `0xFE` is two different registers
+//!
+//! Writing it sets the border, the speaker and the `MIC` output. Reading it
+//! returns five bits of keyboard, chosen by the address ([`crate::keyboard`]),
+//! and the `EAR` input on bit 6. The read has nothing to do with the last
+//! write: reading back what was written to the border is not possible on this
+//! machine, and software that wants to know its own border colour keeps a copy
+//! in RAM, which is what the ROM's `BORDCR` is.
 //!
 //! # The border is a log, not a value
 //!
@@ -38,6 +47,7 @@
 //! taken is `IFF1` going down.
 
 use crate::frame::{INTERRUPT_LENGTH, LINES_PER_FRAME, T_STATES_PER_FRAME, line_of};
+use crate::keyboard::Keyboard;
 
 /// Frames per half of the flash cycle: ink and paper swap for 16 frames, then
 /// swap back, so the whole cycle is 32 frames and takes about two thirds of a
@@ -46,9 +56,22 @@ pub const FLASH_FRAMES: u64 = 16;
 
 use crate::screen::Flash;
 
+/// The bits of a port `0xFE` read that are not the keyboard and not `EAR`.
+/// Bits 5 and 7 are not driven on a 48K machine and read as ones.
+const UNUSED_BITS: u8 = 0b1010_0000;
+
+/// The `EAR` input, bit 6 of a port `0xFE` read.
+const EAR_BIT: u8 = 0b0100_0000;
+
 /// The border and the frame clock.
 #[derive(Clone)]
 pub struct Ula {
+    /// Which keys are down. Written by the frontend (through a command, once
+    /// ticket 0026 puts input in the log) and read by the emulated program.
+    pub keyboard: Keyboard,
+    /// The level on the `EAR` socket, which is what the tape loader listens to
+    /// (ticket 0016). High with nothing plugged in.
+    ear: bool,
     /// The last byte written to port `0xFE`, whole. Bits 0-2 are the border,
     /// bit 3 the MIC output and bit 4 the speaker (ticket 0014).
     port_fe: u8,
@@ -80,6 +103,8 @@ impl Ula {
     /// white before anything else happens.
     pub fn new() -> Ula {
         Ula {
+            keyboard: Keyboard::new(),
+            ear: true,
             port_fe: 0,
             border: 0,
             lines: [0; LINES_PER_FRAME],
@@ -100,14 +125,33 @@ impl Ula {
         }
     }
 
-    /// What a read of port `0xFE` returns.
+    /// What a read of port `0xFE` returns: the keyboard on bits 0-4, `EAR` on
+    /// bit 6, and ones on the two bits nothing drives.
     ///
-    /// Every bit of it belongs to a later ticket: bits 0-4 are the keyboard
-    /// half-row selected by the address lines (0013) and bit 6 is the EAR input
-    /// the tape loader reads (0016). Until then no key is down and the tape is
-    /// silent, which is all ones.
-    pub fn read_port_fe(&self, _port: u16) -> u8 {
-        0xFF
+    /// Which keys the low five bits answer for is a function of the whole
+    /// address, not just of the `0xFE` in the low byte — see
+    /// [`Keyboard::read`].
+    pub fn read_port_fe(&self, port: u16) -> u8 {
+        let ear = if self.ear { EAR_BIT } else { 0 };
+        self.keyboard.read(port) | ear | UNUSED_BITS
+    }
+
+    /// The level on the `EAR` socket. The tape sets it as its edges go past
+    /// (ticket 0016); with nothing plugged in it stays where it starts, which
+    /// is high.
+    ///
+    /// A real 48K machine feeds a little of the `MIC` and speaker output back
+    /// into this bit, and whether it reads high or low with no tape depends on
+    /// which issue of the board it is. Loaders that care about the difference
+    /// are rare and none of them care yet, so the line is simply what it was
+    /// last set to.
+    pub fn set_ear(&mut self, level: bool) {
+        self.ear = level;
+    }
+
+    /// The level on the `EAR` socket.
+    pub fn ear(&self) -> bool {
+        self.ear
     }
 
     /// The last byte written to port `0xFE`.
@@ -258,6 +302,35 @@ mod tests {
         assert_eq!(ula.port_fe(), 0xFF);
         assert!(ula.speaker());
         assert!(ula.mic());
+    }
+
+    #[test]
+    fn a_read_of_port_fe_is_the_keyboard_the_ear_line_and_ones() {
+        use crate::keyboard::Key;
+
+        let mut ula = Ula::new();
+        assert!(ula.ear());
+        assert_eq!(ula.read_port_fe(0xFEFE), 0xFF);
+
+        ula.keyboard.press(Key::CapsShift);
+        ula.keyboard.press(Key::Num6);
+        assert_eq!(ula.read_port_fe(Key::CapsShift.port()), 0xFE);
+        assert_eq!(ula.read_port_fe(Key::Num6.port()), 0xEF);
+        // The two bits nothing drives stay high whatever is held.
+        assert_eq!(ula.read_port_fe(0x00FE) & UNUSED_BITS, UNUSED_BITS);
+
+        ula.set_ear(false);
+        assert!(!ula.ear());
+        assert_eq!(ula.read_port_fe(0xFFFE), 0xFF & !EAR_BIT);
+    }
+
+    #[test]
+    fn what_was_written_to_port_fe_is_not_what_is_read_back() {
+        // The border is write-only: an OUT of black leaves the read alone.
+        let mut ula = Ula::new();
+        ula.write_port_fe(0, 0x00);
+        assert_eq!(ula.border(), 0);
+        assert_eq!(ula.read_port_fe(0xFEFE), 0xFF);
     }
 
     #[test]

@@ -14,8 +14,6 @@
 //!
 //! **The floating bus.** A read of an unattached port returns `0xFF` rather
 //! than the byte the ULA happens to be fetching, which is the same ticket.
-//!
-//! **The keyboard.** [`Ula::read_port_fe`] says why (ticket 0013).
 
 use rkw_debug::machine::{Clock, Machine};
 use z80::Bus;
@@ -100,7 +98,9 @@ impl Spectrum {
 
     /// True for the port the ULA answers, which is any port with `A0` low —
     /// `0xFE` is the conventional spelling of it, and the ROM uses `0x7FFE`,
-    /// `0xBFFE` and the rest to select keyboard half-rows (ticket 0013).
+    /// `0xBFFE` and the rest to select keyboard half-rows, which is why the
+    /// whole address goes through to [`Ula::read_port_fe`] and not just the
+    /// low byte.
     fn is_ula(port: u16) -> bool {
         port & 1 == 0
     }

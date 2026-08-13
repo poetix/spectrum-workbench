@@ -26,23 +26,32 @@
 //!   place the two are related.
 //! - [`memory`] is the map, which on a 48K machine is the single decision that
 //!   writes below `0x4000` do nothing.
+//! - [`keyboard`] is the matrix: forty keys as eight half-rows of five, read
+//!   through whichever address lines the program drove low.
+//! - [`keymap`] is the bridge from a host keyboard to that matrix, as a table
+//!   so that layouts can be swapped without touching code.
 //! - [`screen`] is the display decode and the framebuffer. It takes a byte
 //!   source and a base address rather than a machine, so the debugger's screen
 //!   pane, a `.scr` file and the live display all render through it
 //!   (ADR-0020).
-//! - [`ula`] is the frame clock, the interrupt, the flash cadence and the
-//!   border — the last of which is recorded per scanline, because that is how
-//!   Spectrum software makes timing visible.
+//! - [`ula`] is the frame clock, the interrupt, the flash cadence, the border
+//!   — the last of which is recorded per scanline, because that is how
+//!   Spectrum software makes timing visible — and the two halves of port
+//!   `0xFE`.
 //! - [`spectrum`] wires them to the CPU's bus and to the emulation thread's
 //!   [`Machine`](rkw_debug::Machine).
 
 pub mod frame;
+pub mod keyboard;
+pub mod keymap;
 pub mod memory;
 pub mod screen;
 pub mod spectrum;
 pub mod ula;
 
 pub use frame::{HEIGHT, LINES_PER_FRAME, T_STATES_PER_FRAME, T_STATES_PER_LINE, WIDTH, line_of};
+pub use keyboard::{Key, Keyboard};
+pub use keymap::{HostKey, HostKeys, KeyMap};
 pub use memory::{Memory, RomTooLarge, SCREEN_BASE};
 pub use screen::{DISPLAY_BYTES, Flash, Framebuffer, PALETTE, decode, decode_into};
 pub use spectrum::Spectrum;
