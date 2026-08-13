@@ -7,7 +7,7 @@
 //! here and not by typing at a prompt.
 
 use rkw_debug::cmd::parse::{Base, Format, Info, Unit};
-use rkw_debug::cmd::{Addr, Request, parse};
+use rkw_debug::cmd::{Addr, Place, Request, parse};
 use rkw_debug::condition::{Cmp, Condition, Operand};
 use z80::{Reg8, Reg16, flag};
 
@@ -44,7 +44,7 @@ fn numbers_are_written_the_four_ways_they_are_written() {
         assert_eq!(
             parsed(line),
             Request::Break {
-                addr: Addr::abs(0x8000),
+                at: Place::At(Addr::abs(0x8000)),
                 condition: None,
             },
             "{line}"
@@ -213,7 +213,7 @@ fn a_condition_is_a_comparison() {
     assert_eq!(
         parsed("break $8002 if a == $2A"),
         Request::Break {
-            addr: Addr::abs(0x8002),
+            at: Place::At(Addr::abs(0x8002)),
             condition: Some(Condition::reg8_eq(Reg8::A, 0x2A)),
         }
     );
@@ -323,5 +323,120 @@ fn the_caret_lands_on_the_offending_token() {
     assert_eq!(
         error.column, 3,
         "the column of the bad letter, not the spec"
+    );
+}
+
+// ---- Places: symbols and source lines --------------------------------------
+
+#[test]
+fn a_name_that_is_not_a_register_is_a_symbol() {
+    assert_eq!(
+        parsed("break main"),
+        Request::Break {
+            at: Place::At(Addr::symbol("main")),
+            condition: None,
+        }
+    );
+    // Offsets work from a symbol as from a register, and a local label starts
+    // with the dot the assembler gives it.
+    assert_eq!(
+        parsed("x/16 screen_buffer+2"),
+        Request::Examine {
+            addr: Addr {
+                base: Base::Symbol("screen_buffer".into()),
+                offset: 2,
+            },
+            count: 16,
+            format: Format::Hex,
+            unit: Unit::Byte,
+        }
+    );
+    assert_eq!(parsed("until .loop"), Request::Until(Addr::symbol(".loop")));
+
+    // A register still wins: `hl` is the pair, whatever the program calls its
+    // labels.
+    assert_eq!(
+        parsed("break hl"),
+        Request::Break {
+            at: Place::At(Addr {
+                base: Base::Reg(Reg16::Hl),
+                offset: 0
+            }),
+            condition: None,
+        }
+    );
+}
+
+#[test]
+fn commands_ignore_case_and_symbols_do_not() {
+    // The assembler's symbols are case-sensitive, so `Draw` and `draw` are two
+    // labels and the parser must not fold them together — while `BREAK` and
+    // `PC` are the same command and the same register whatever was typed.
+    assert_eq!(
+        parsed("BREAK Draw"),
+        Request::Break {
+            at: Place::At(Addr::symbol("Draw")),
+            condition: None,
+        }
+    );
+    assert_eq!(
+        parsed("DISAS PC-8 4"),
+        Request::Disas {
+            addr: Some(Addr {
+                base: Base::Pc,
+                offset: -8
+            }),
+            count: 4,
+        }
+    );
+    assert!(matches!(parsed("X/4XB $4000"), Request::Examine { .. }));
+}
+
+#[test]
+fn a_source_line_is_a_place_and_a_path_survives_being_one() {
+    assert_eq!(
+        parsed("break main.asm:42"),
+        Request::Break {
+            at: Place::Source {
+                file: "main.asm".into(),
+                line: 42
+            },
+            condition: None,
+        }
+    );
+    // The spec is taken from the text rather than from the tokens, because a
+    // path is made of characters the lexer takes apart.
+    assert_eq!(
+        parsed("break ../src/my-file.asm:7 if a == 1"),
+        Request::Break {
+            at: Place::Source {
+                file: "../src/my-file.asm".into(),
+                line: 7
+            },
+            condition: Some(Condition::reg8_eq(Reg8::A, 1)),
+        }
+    );
+    assert_eq!(error("break main.asm:0"), "lines are numbered from 1");
+}
+
+#[test]
+fn list_takes_any_place_or_none_at_all() {
+    assert_eq!(parsed("list"), Request::List(None));
+    assert_eq!(
+        parsed("list main.asm:42"),
+        Request::List(Some(Place::Source {
+            file: "main.asm".into(),
+            line: 42
+        }))
+    );
+    assert_eq!(
+        parsed("l main"),
+        Request::List(Some(Place::At(Addr::symbol("main"))))
+    );
+    // A bare number is an address here as it is everywhere else, rather than
+    // gdb's line number: the grammar has one meaning for `42` and keeps it.
+    assert_eq!(
+        parsed("list $8000"),
+        Request::List(Some(Place::At(Addr::abs(0x8000))))
     );
 }

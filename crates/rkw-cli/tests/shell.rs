@@ -207,3 +207,104 @@ fn command_line_numbers_take_the_same_spellings_as_commands() {
     assert_eq!(load::number("$10000"), None, "beyond sixteen bits");
     assert_eq!(load::number("nonsense"), None);
 }
+
+/// The same loop as `assemble_run_and_assert`, said in source terms: break on
+/// a label, break on a line, and read the source back — which is ticket 0011's
+/// half of what ADR-0013 wanted scriptability for.
+#[test]
+fn assemble_and_debug_in_source_terms() {
+    // Written with its indentation intact: a name in the first column is a
+    // label, so an invocation has to be indented like the assembler's own.
+    let source = temp(
+        "sourced.asm",
+        concat!(
+            "        org $8000\n",
+            "twice   macro\n",
+            "        nop\n",
+            "        endm\n",
+            "start:  ld a,7\n",
+            "        twice\n",
+            "        twice\n",
+            "done:   halt\n",
+        ),
+    );
+    let name = source
+        .file_name()
+        .expect("a file name")
+        .to_string_lossy()
+        .to_string();
+    let mut mem = FlatMemory::new();
+    let program = load::assemble_file(&mut mem, &source).expect("it assembles");
+    let sources = program.sources.clone().expect("assembling brings its own");
+    assert!(sources.stale().is_empty(), "just assembled, so not stale");
+
+    let mut cpu = Cpu::new();
+    cpu.regs.pc = program.entry.unwrap();
+    let mut session = Session::new(cpu, mem, Config::default());
+    session.set_sources(sources);
+    let mut shell = Shell::new(session);
+
+    // The `nop` inside the macro is one line and two addresses.
+    // Named by its base name, which the debug info holds as a whole path.
+    let text = script(&mut shell, &format!("break {name}:3\n"));
+    assert_eq!(text.matches("Breakpoint").count(), 2, "{text}");
+
+    let text = script(&mut shell, "continue\n");
+    assert!(text.contains(&format!("{name}:3")), "{text}");
+    assert!(text.contains("in macro `twice`"), "{text}");
+
+    // A label is an address, and `list` shows what is around it.
+    let text = script(&mut shell, "break done\ncontinue\nlist\n");
+    assert!(text.contains("halt"), "{text}");
+    assert_eq!(shell.errors(), 0, "{text}");
+    std::fs::remove_file(source).ok();
+}
+
+#[test]
+fn a_binary_and_its_sidecar_come_back_together_and_notice_a_stale_source() {
+    let dir = std::env::temp_dir().join(format!("rkw-cli-{}-sidecar", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("a directory");
+    let source = dir.join("prog.asm");
+    std::fs::write(
+        &source,
+        "        org $8000\nstart:  ld a,42\n        halt\n",
+    )
+    .expect("written");
+
+    // Assemble, write the sidecar beside the binary, and throw the session
+    // away: what is left is what someone building elsewhere hands the debugger.
+    let mut mem = FlatMemory::new();
+    let program = load::assemble_file(&mut mem, &source).expect("it assembles");
+    let info = program.sources.expect("debug info").info().clone();
+    let sidecar = load::sidecar_of(&dir.join("prog.bin"));
+    info.write(&sidecar).expect("written");
+
+    let sources = load::debug_file(&sidecar).expect("read back");
+    assert_eq!(sources.address_of("start"), Ok(0x8000));
+    assert_eq!(
+        sources
+            .locate(0x8000)
+            .expect("covered")
+            .text
+            .as_deref()
+            .map(str::trim),
+        Some("start:  ld a,42"),
+        "the source was found beside the sidecar"
+    );
+    assert!(sources.stale().is_empty());
+
+    // Edit the source and it is the same binary with text that no longer
+    // describes it, which is the one thing worth being told about.
+    std::fs::write(&source, "        org $8000\n        nop\nstart:  ld a,42\n").expect("written");
+    let sources = load::debug_file(&sidecar).expect("read back");
+    assert_eq!(sources.stale().len(), 1);
+    assert!(
+        sources.stale()[0].ends_with("prog.asm"),
+        "{:?}",
+        sources.stale()
+    );
+    assert!(sources.locate(0x8000).expect("covered").stale);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

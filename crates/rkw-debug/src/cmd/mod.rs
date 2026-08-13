@@ -43,7 +43,11 @@ pub mod format;
 pub mod parse;
 
 pub use exec::{
-    Armed, ArmedList, Disassembly, Error, ExecError, MemoryDump, Outcome, RegisterView, Session,
-    Stop, StringAt, Trace,
+    Armed, ArmedList, Disassembly, Error, ExecError, LIST_CONTEXT, MemoryDump, Outcome,
+    RegisterView, Session, Stop, StringAt, Trace,
 };
-pub use parse::{Addr, Base, Format, Info, ParseError, Request, Unit, parse};
+pub use parse::{Addr, Base, Format, Info, ParseError, Place, Request, Unit, parse};
+
+/// Re-exported so that a front end driving the command layer has one crate to
+/// depend on: everything source-level in an [`Outcome`] is one of these.
+pub use rkw_dbginfo::{DebugInfo, Frame, Listing, Located, ResolveError, Site, Sources};

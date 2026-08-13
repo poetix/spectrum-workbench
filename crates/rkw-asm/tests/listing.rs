@@ -3,7 +3,7 @@
 mod common;
 
 use common::assemble_ok;
-use rkw_asm::DebugInfo;
+use rkw_asm::debug_info;
 use rkw_asm::listing::{listing, symbols_by_address, symbols_by_name};
 
 #[test]
@@ -108,7 +108,7 @@ count   defl 3
 later:  nop
 ";
     let (map, mut assembled) = assemble_ok(source);
-    let info = DebugInfo::new(&map, &mut assembled);
+    let info = debug_info(&map, &mut assembled);
 
     assert_eq!(
         symbols_by_name(&info),

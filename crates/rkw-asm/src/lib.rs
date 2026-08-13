@@ -60,7 +60,7 @@ pub mod symbols;
 
 pub use assemble::{Assembled, Image, LineRecord, Segment, assemble};
 pub use ast::{BinOp, Expr, ExprKind, Label, LabelKind, Op, Program, Statement, UnOp};
-pub use debug::DebugInfo;
+pub use debug::{DebugInfo, info as debug_info};
 pub use diag::{Diagnostic, Severity};
 pub use encode::{EncodeError, Plan, encode, plan};
 pub use eval::{EvalError, Site, eval};

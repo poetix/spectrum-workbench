@@ -66,6 +66,16 @@ symbol	width	256	constant	1	3	1
 at address 32771 is two bytes long and came from main.asm:5:9 — inside that
 expansion, which is what the trailing `0` says.
 
+## Where it lives
+
+The format is `rkw-dbginfo`, a crate the assembler and the debugger both depend
+on and neither owns
+([ADR-0019](../adr/0019-the-debug-info-format-is-its-own-crate.md)). That crate
+also holds the questions asked of the pair of a sidecar and the source text it
+names: which file a spec like `main.asm` refers to, which addresses a line
+produced, what a symbol is worth, what source produced an address, and whether
+the text on disk has been edited since the sidecar was written.
+
 ## Compatibility
 
 The version number on the first line changes when a record's field list changes

@@ -11,6 +11,8 @@ description = "Debugger core: breakpoints, watchpoints and execution control for
 # Cache padding, per ADR-0010: the table is per target and belongs upstream,
 # not in a `#[repr(align(128))]` justified by this laptop's cache line.
 crossbeam-utils = "0.8"
+# The debug info format, which the assembler writes and this reads (ADR-0019).
+rkw-dbginfo = { path = "../rkw-dbginfo" }
 z80 = { path = "../z80" }
 
 [dev-dependencies]

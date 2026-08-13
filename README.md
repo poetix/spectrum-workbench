@@ -10,9 +10,9 @@ ROM with tape loading and saving, screen output and sound.
 **Status: early.** The CPU core and disassembler are complete and validated, and
 the assembler is finished: it turns source into Z80 machine code that runs on
 it, with macros, conditional assembly, a listing and debug information. The
-debugger works — breakpoints, watchpoints, stepping, and a gdb-style REPL that
-assembles a file and runs it — but nothing runs a Spectrum yet, so there is no
-screen, no keyboard and no tape.
+debugger works — breakpoints, watchpoints, stepping, source-level breakpoints
+and listings, and a gdb-style REPL that assembles a file and runs it — but
+nothing runs a Spectrum yet, so there is no screen, no keyboard and no tape.
 
 ## What works
 
@@ -140,6 +140,18 @@ none of the third, which is what a DAP adapter will do (ADR-0016); the executor
 never returns a `String` where it could return a value, and the parser and the
 formatter are both tested without an emulator anywhere near them.
 
+Where a program brought debug information, the debugger talks about source
+rather than about addresses: `break plot.asm:12` arms one breakpoint per address
+that line produced — five, for a line inside a macro used five times — a stop
+shows the line and the macro invocation that reached it, `list` shows what is
+around the current position, and a label is an address anywhere an address can
+be written. The format and the resolution over it are their own crate
+([ADR-0019](adr/0019-the-debug-info-format-is-its-own-crate.md)), because the
+sidecar is a contract between two programs and a debugger that had to link the
+assembler to read one could not debug a program the assembler did not build.
+Source that has been edited since it was assembled is reported rather than shown
+as if it ran.
+
 ### Driving it
 
 `rkwdbg` is the terminal front end: it assembles a source file, loads it, and
@@ -166,10 +178,28 @@ T=84 after 11 instructions
 $800F  00 00 00 00 00 00 00 00                          |........|
 ```
 
+```text
+(rkw) break plot.asm:5
+Breakpoint 1 at $8005 (plot.asm:5)
+Breakpoint 2 at $800A (plot.asm:5)
+(rkw) continue
+Breakpoint 1 at $8005
+plot.asm:5          ld ($4000),a
+   in macro `plot`, invoked at demo.asm:9
+=> 8005  32 00 40     LD ($4000),A
+   T=17 after 2 instructions
+(rkw) list
+demo.asm
+      7
+      8  start:  ld hl,$4000
+=>    9          plot 1
+     10          plot 2
+```
+
 The commands are gdb's where gdb has them — `break`, `delete`, `step`, `next`,
-`finish`, `continue`, `until`, `x`, `disas`, `info breakpoints`, `watch`,
-`rwatch`, `awatch` — with `regs`, `trace`, `reset`, `poke` and `pwatch` for the
-things a Z80 has that gdb's targets do not. `help` lists them all. Breakpoint
+`finish`, `continue`, `until`, `list`, `x`, `disas`, `info breakpoints`,
+`watch`, `rwatch`, `awatch` — with `regs`, `trace`, `reset`, `poke` and `pwatch`
+for the things a Z80 has that gdb's targets do not. `help` lists them all. Breakpoint
 conditions are written `break $8000 if a > 1 && [hl] == 0`, memory in a
 condition is `[hl]` so that parentheses can go on meaning grouping, and a flag
 is `f.z` rather than `z` because `c` is already a register.
@@ -181,9 +211,13 @@ harness for the assembler: assemble, run to somewhere, look at a register.
 rkwdbg program.asm --batch -x check.rkw
 ```
 
-`--batch` exits non-zero if any command failed, so a script is a test. Source
-lines and labels are not addresses yet — that is ticket 0011, and until then
-`break main` says so rather than guessing.
+`--batch` exits non-zero if any command failed, so a script is a test — and
+since a label is an address, the script can say `until draw_sprite` rather than
+`until $80F3` and go on meaning it after the code moves.
+
+A source file assembled by `rkwdbg` brings its own debug information, from the
+same text it assembled. A binary brings whatever `FILE.rkwdbg` sits beside it,
+or whatever `--debug` names.
 
 ## Layout
 
@@ -191,6 +225,7 @@ lines and labels are not addresses yet — that is ticket 0011, and until then
 crates/
   rkw-asm/        macro assembler: complete
   rkw-cli/        rkwdbg: the terminal front end
+  rkw-dbginfo/    the debug info format, and source resolution over it
   rkw-debug/      debugger core, emulation thread, command layer
   z80/            CPU core and disassembler
 adr/              architecture decision records

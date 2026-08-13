@@ -31,12 +31,14 @@
 
 use std::fmt;
 
+use rkw_dbginfo::{Listing, Located, ResolveError, Site, Sources};
 use z80::disasm::{Instruction, Peek, decode};
 use z80::{Cpu, Regs};
 
-use super::parse::{Addr, Base, Format, Info, ParseError, Request, Unit, parse};
+use super::parse::{Addr, Base, Format, Info, ParseError, Place, Request, Unit, parse};
 use crate::breakpoints::{Breakpoint, Breakpoints, Id, PortWatch, Watchpoint};
 use crate::command::Command;
+use crate::condition::Condition;
 use crate::emu::{Config, Emu, Handle, RunState};
 use crate::machine::Machine;
 use crate::{Debugger, StopReason};
@@ -65,6 +67,10 @@ pub struct Stop {
     pub instructions: u64,
     /// What will run next, not what just ran.
     pub next: Instruction,
+    /// The source that produced it, when there is debug info to say. Resolved
+    /// here rather than by the formatter, so that a front end which never
+    /// formats anything still knows which line to highlight.
+    pub at: Option<Located>,
 }
 
 /// The registers, and the two counters that say when they are.
@@ -110,6 +116,12 @@ pub struct Disassembly {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Armed {
     Breakpoint(Breakpoint),
+    /// A breakpoint set on a source line, which is one per address that line
+    /// produced — five, for a line inside a macro used five times.
+    Source {
+        site: Site,
+        breakpoints: Vec<Breakpoint>,
+    },
     Watchpoint(Watchpoint),
     PortWatch(PortWatch),
 }
@@ -154,6 +166,8 @@ pub enum Outcome {
         enabled: bool,
     },
     List(ArmedList),
+    /// Source text around somewhere, for `list`.
+    Source(Listing),
     Trace(Trace),
     Poked {
         addr: u16,
@@ -183,6 +197,14 @@ pub enum ExecError {
     /// The command ring was full, which needs the emulation thread to be
     /// wedged; it cannot happen while the session drives the loop itself.
     Busy,
+    /// Something was named by symbol or by source line and no debug info was
+    /// loaded, so there is nothing to look it up in.
+    NoDebugInfo,
+    /// A name that debug info was loaded for and did not answer.
+    Unresolved(ResolveError),
+    /// There is debug info, but nothing in it covers this address — a `list`
+    /// inside the ROM, or inside a table.
+    NoSourceAt(u16),
 }
 
 impl fmt::Display for ExecError {
@@ -194,6 +216,14 @@ impl fmt::Display for ExecError {
             }
             ExecError::Exited => write!(f, "the machine has exited"),
             ExecError::Busy => write!(f, "the command queue is full"),
+            ExecError::NoDebugInfo => write!(
+                f,
+                "no debug information is loaded, so names and source lines mean nothing here"
+            ),
+            ExecError::Unresolved(e) => write!(f, "{e}"),
+            ExecError::NoSourceAt(addr) => {
+                write!(f, "no source produced ${addr:04X}")
+            }
         }
     }
 }
@@ -230,12 +260,23 @@ impl From<ExecError> for Error {
     }
 }
 
+impl From<ResolveError> for ExecError {
+    fn from(e: ResolveError) -> ExecError {
+        ExecError::Unresolved(e)
+    }
+}
+
 /// A machine, a debugger, and the commands that drive them.
 pub struct Session<M: Machine> {
     emu: Emu<M>,
     handle: Handle,
     entry: u16,
     run_limit: Option<u64>,
+    /// What the program was assembled from, when anything said. Everything
+    /// source-level is a question asked of this and of nothing else, so a
+    /// session without it is the debugger exactly as it was before ticket
+    /// 0011 rather than a degraded one.
+    sources: Option<Sources>,
 }
 
 impl<M: Machine> Session<M> {
@@ -252,7 +293,21 @@ impl<M: Machine> Session<M> {
             handle,
             entry,
             run_limit: Some(DEFAULT_RUN_LIMIT),
+            sources: None,
         }
+    }
+
+    /// Give the session the program's debug information and source text.
+    pub fn set_sources(&mut self, sources: Sources) {
+        self.sources = Some(sources);
+    }
+
+    pub fn sources(&self) -> Option<&Sources> {
+        self.sources.as_ref()
+    }
+
+    fn require_sources(&self) -> Result<&Sources, ExecError> {
+        self.sources.as_ref().ok_or(ExecError::NoDebugInfo)
     }
 
     /// Where `run` restarts from.
@@ -308,16 +363,9 @@ impl<M: Machine> Session<M> {
 
     pub fn execute(&mut self, request: &Request) -> Result<Outcome, ExecError> {
         match request {
-            Request::Break { addr, condition } => {
-                let addr = self.resolve(*addr);
-                let breaks = &mut self.emu.debugger.breakpoints;
-                let id = breaks.add_exec(addr);
-                breaks.set_condition(id, condition.clone());
-                let bp = breaks.breakpoint(addr).expect("just armed").clone();
-                Ok(Outcome::Armed(Armed::Breakpoint(bp)))
-            }
+            Request::Break { at, condition } => self.arm_break(at, condition.clone()),
             Request::Watch { addr, read, write } => {
-                let addr = self.resolve(*addr);
+                let addr = self.resolve(addr)?;
                 let breaks = &mut self.emu.debugger.breakpoints;
                 breaks.watch_mem(addr, *read, *write);
                 let w = breaks.watchpoint(addr).expect("just armed").clone();
@@ -347,12 +395,12 @@ impl<M: Machine> Session<M> {
             Request::Finish => Ok(Outcome::Stopped(self.movement(Command::StepOut)?)),
             Request::Continue => Ok(Outcome::Stopped(self.movement(Command::Resume)?)),
             Request::Until(addr) => {
-                let addr = self.resolve(*addr);
+                let addr = self.resolve(addr)?;
                 Ok(Outcome::Stopped(self.movement(Command::RunTo(addr))?))
             }
             Request::Run(addr) => {
                 if let Some(addr) = addr {
-                    self.entry = self.resolve(*addr);
+                    self.entry = self.resolve(addr)?;
                 }
                 self.apply(Command::Reset)?;
                 self.apply(Command::SetPc(self.entry))?;
@@ -370,12 +418,13 @@ impl<M: Machine> Session<M> {
                 count,
                 format,
                 unit,
-            } => self.examine(*addr, *count, *format, *unit),
-            Request::Disas { addr, count } => self.disassemble(*addr, *count),
+            } => self.examine(addr, *count, *format, *unit),
+            Request::Disas { addr, count } => self.disassemble(addr.as_ref(), *count),
             Request::Trace(n) => self.trace(*n),
             Request::Info(Info::Breakpoints) => Ok(Outcome::List(self.armed())),
+            Request::List(place) => self.list(place.as_ref()),
             Request::Poke { addr, value } => {
-                let addr = self.resolve(*addr);
+                let addr = self.resolve(addr)?;
                 let old = self.emu.machine.peek(addr);
                 self.apply(Command::Poke {
                     addr,
@@ -397,6 +446,40 @@ impl<M: Machine> Session<M> {
     }
 
     // ---- Arming ----------------------------------------------------------
+
+    /// A breakpoint at an address, or one per address a source line produced.
+    ///
+    /// The one-to-many case is why this is not simply a resolve: `break
+    /// plot.asm:12` on a line inside a macro used five times has to arm five
+    /// breakpoints, and arming one of them would be a debugger that stopped on
+    /// a fifth of the executions and said nothing about the rest.
+    fn arm_break(
+        &mut self,
+        at: &Place,
+        condition: Option<Condition>,
+    ) -> Result<Outcome, ExecError> {
+        let (addresses, site) = match at {
+            Place::At(addr) => (vec![self.resolve(addr)?], None),
+            Place::Source { file, line } => {
+                let site = self.require_sources()?.site(file, *line)?;
+                (site.addresses.clone(), Some(site))
+            }
+        };
+        let breaks = &mut self.emu.debugger.breakpoints;
+        let mut armed = Vec::with_capacity(addresses.len());
+        for addr in addresses {
+            let id = breaks.add_exec(addr);
+            breaks.set_condition(id, condition.clone());
+            armed.push(breaks.breakpoint(addr).expect("just armed").clone());
+        }
+        Ok(Outcome::Armed(match site {
+            None => Armed::Breakpoint(armed.pop().expect("one address")),
+            Some(site) => Armed::Source {
+                site,
+                breakpoints: armed,
+            },
+        }))
+    }
 
     fn delete(&mut self, ids: &[Id]) -> Result<Outcome, ExecError> {
         let breaks = &mut self.emu.debugger.breakpoints;
@@ -541,6 +624,7 @@ impl<M: Machine> Session<M> {
             t: self.emu.machine.t_states(),
             instructions: self.emu.cpu.instructions,
             next: Instruction::render(&self.emu.machine, &decode(&self.emu.machine, pc)),
+            at: self.sources.as_ref().and_then(|s| s.locate(pc)),
         }
     }
 
@@ -554,9 +638,31 @@ impl<M: Machine> Session<M> {
         }
     }
 
+    /// Source around somewhere: the current position, an address, or a line.
+    fn list(&mut self, place: Option<&Place>) -> Result<Outcome, ExecError> {
+        let sources = self.require_sources()?;
+        let listing = match place {
+            Some(Place::Source { file, line }) => sources.listing(file, *line, LIST_CONTEXT)?,
+            other => {
+                let addr = match other {
+                    Some(Place::At(addr)) => self.resolve(addr)?,
+                    _ => self.emu.cpu.regs.pc,
+                };
+                // Borrowed again because `resolve` needed the session.
+                let sources = self.require_sources()?;
+                let at = sources
+                    .info()
+                    .line_at(addr)
+                    .ok_or(ExecError::NoSourceAt(addr))?;
+                sources.listing_at(at.at.file, at.at.line, LIST_CONTEXT)?
+            }
+        };
+        Ok(Outcome::Source(listing))
+    }
+
     fn examine(
         &mut self,
-        addr: Addr,
+        addr: &Addr,
         count: u32,
         format: Format,
         unit: Unit,
@@ -567,7 +673,7 @@ impl<M: Machine> Session<M> {
                 limit: MAX_ITEMS,
             });
         }
-        let addr = self.resolve(addr);
+        let addr = self.resolve(addr)?;
         if format == Format::Str {
             return Ok(Outcome::Strings(self.strings(addr, count)));
         }
@@ -611,7 +717,7 @@ impl<M: Machine> Session<M> {
     /// Disassemble `count` instructions, and when no address was given a few
     /// before `PC` as well: the question at a breakpoint is usually "how did
     /// this get here", and the answer is above the line.
-    fn disassemble(&mut self, addr: Option<Addr>, count: u32) -> Result<Outcome, ExecError> {
+    fn disassemble(&mut self, addr: Option<&Addr>, count: u32) -> Result<Outcome, ExecError> {
         if count > MAX_ITEMS {
             return Err(ExecError::TooMany {
                 asked: count,
@@ -620,7 +726,7 @@ impl<M: Machine> Session<M> {
         }
         let pc = self.emu.cpu.regs.pc;
         let (start, count) = match addr {
-            Some(addr) => (self.resolve(addr), count),
+            Some(addr) => (self.resolve(addr)?, count),
             None => (
                 back_up(&self.emu.machine, pc, CONTEXT_BEFORE),
                 count + CONTEXT_BEFORE,
@@ -673,15 +779,22 @@ impl<M: Machine> Session<M> {
         }))
     }
 
-    fn resolve(&self, addr: Addr) -> u16 {
-        let base = match addr.base {
-            Base::Abs(a) => a,
+    /// An address as the command named it: literal, through a register, or by
+    /// a symbol from the debug info.
+    fn resolve(&self, addr: &Addr) -> Result<u16, ExecError> {
+        let base = match &addr.base {
+            Base::Abs(a) => *a,
             Base::Pc => self.emu.cpu.regs.pc,
-            Base::Reg(r) => self.emu.cpu.regs.get16(r),
+            Base::Reg(r) => self.emu.cpu.regs.get16(*r),
+            Base::Symbol(name) => self.require_sources()?.address_of(name)?,
         };
-        base.wrapping_add(addr.offset as u16)
+        Ok(base.wrapping_add(addr.offset as u16))
     }
 }
+
+/// How many lines either side of the interesting one `list` shows. Eleven
+/// lines is a screenful of context and not a screenful of scrolling.
+pub const LIST_CONTEXT: u32 = 5;
 
 /// How many instructions of context `disas` with no address shows before `PC`.
 const CONTEXT_BEFORE: u32 = 3;

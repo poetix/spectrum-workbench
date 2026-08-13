@@ -21,6 +21,7 @@ usage: rkwdbg [options] [FILE.asm]
 
   FILE.asm            assemble and load a source file
   --load ADDR=FILE    load raw bytes at an address (repeatable)
+  --debug FILE        read a .rkwdbg sidecar, for a binary assembled elsewhere
   --pc ADDR           where to start; defaults to the lowest address loaded
   --sp ADDR           initial stack pointer (default $FF00)
   --limit T           T-states one run may take before handing back, 0 for none
@@ -28,7 +29,11 @@ usage: rkwdbg [options] [FILE.asm]
   --batch             run the scripts and exit, without a prompt
   -h, --help          this
 
-Addresses are $hex, 0xhex, %binary or decimal.";
+Addresses are $hex, 0xhex, %binary or decimal. Where there is debug
+information, --pc also takes a label.
+
+A source file assembled here brings its own debug information. A binary brings
+whatever `FILE.rkwdbg` sits beside it, unless --debug says otherwise.";
 
 /// Somewhere well clear of a 48K screen and its system variables, and where
 /// the debugger's own tests put it.
@@ -38,7 +43,10 @@ struct Options {
     source: Option<PathBuf>,
     binaries: Vec<(u16, PathBuf)>,
     scripts: Vec<PathBuf>,
-    pc: Option<u16>,
+    debug: Option<PathBuf>,
+    /// Kept as text because it may be a label, and what a label is worth is
+    /// not known until the debug information has been read.
+    pc: Option<String>,
     sp: u16,
     limit: Option<u64>,
     batch: bool,
@@ -62,11 +70,30 @@ fn main() -> ExitCode {
     }
 }
 
+/// The debug information a program brought with it: what was assembled here,
+/// or the sidecar sitting beside a binary.
+fn sources_of(
+    programs: &[Program],
+    options: &Options,
+) -> Result<Option<rkw_dbginfo::Sources>, LoadError> {
+    if let Some(sources) = programs.iter().find_map(|p| p.sources.clone()) {
+        return Ok(Some(sources));
+    }
+    for (_, path) in &options.binaries {
+        let sidecar = load::sidecar_of(path);
+        if sidecar.is_file() {
+            return Ok(Some(load::debug_file(&sidecar)?));
+        }
+    }
+    Ok(None)
+}
+
 fn parse_args() -> Result<Option<Options>, String> {
     let mut options = Options {
         source: None,
         binaries: Vec::new(),
         scripts: Vec::new(),
+        debug: None,
         pc: None,
         sp: DEFAULT_SP,
         limit: None,
@@ -89,10 +116,8 @@ fn parse_args() -> Result<Option<Options>, String> {
                 options.binaries.push((addr, PathBuf::from(path)));
             }
             "-x" | "--script" => options.scripts.push(PathBuf::from(value("--script")?)),
-            "--pc" => {
-                let text = value("--pc")?;
-                options.pc = Some(load::number(&text).ok_or(format!("{text} is not an address"))?);
-            }
+            "--debug" => options.debug = Some(PathBuf::from(value("--debug")?)),
+            "--pc" => options.pc = Some(value("--pc")?),
             "--sp" => {
                 let text = value("--sp")?;
                 options.sp = load::number(&text).ok_or(format!("{text} is not an address"))?;
@@ -123,10 +148,31 @@ fn run(options: Options) -> Result<ExitCode, LoadError> {
         programs.push(load::binary_file(&mut mem, path, *origin)?);
     }
 
-    let entry = options
-        .pc
-        .or_else(|| programs.iter().filter_map(|p| p.entry).min())
-        .unwrap_or(0);
+    let sources = match &options.debug {
+        Some(path) => Some(load::debug_file(path)?),
+        None => sources_of(&programs, &options)?,
+    };
+
+    // A label is an address as far as everything downstream is concerned, but
+    // it cannot be resolved until there is something to resolve it against.
+    let entry = match (&options.pc, &sources) {
+        (Some(text), _) if load::number(text).is_some() => load::number(text),
+        (Some(text), Some(sources)) => {
+            Some(sources.address_of(text).map_err(|e| LoadError::DebugInfo {
+                path: "--pc".into(),
+                message: e.to_string(),
+            })?)
+        }
+        (Some(text), None) => {
+            return Err(LoadError::DebugInfo {
+                path: "--pc".into(),
+                message: format!("{text} is not an address, and there is no debug information"),
+            });
+        }
+        (None, _) => programs.iter().filter_map(|p| p.entry).min(),
+    }
+    .unwrap_or(0);
+
     let mut cpu = Cpu::new();
     cpu.regs.pc = entry;
     cpu.regs.sp = options.sp;
@@ -140,6 +186,14 @@ fn run(options: Options) -> Result<ExitCode, LoadError> {
 
     let stdout = io::stdout();
     let mut out = stdout.lock();
+    let stale: Vec<String> = sources
+        .iter()
+        .flat_map(|s| s.stale())
+        .map(str::to_string)
+        .collect();
+    if let Some(sources) = sources {
+        session.set_sources(sources);
+    }
     let mut shell = Shell::new(session);
 
     for program in &programs {
@@ -155,6 +209,14 @@ fn run(options: Options) -> Result<ExitCode, LoadError> {
                 loaded.path.display()
             )?;
         }
+    }
+    // Said once, at the top, rather than at every stop: the addresses are
+    // still the binary's, and it is the text beside them that has moved on.
+    for file in &stale {
+        writeln!(
+            out,
+            "warning: {file} has changed since the debug information was written"
+        )?;
     }
     writeln!(out, "Entry point ${entry:04X}. `help` lists the commands.")?;
 

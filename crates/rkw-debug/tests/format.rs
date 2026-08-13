@@ -8,7 +8,7 @@ use rkw_debug::breakpoints::{Breakpoint, PortWatch, Watchpoint};
 use rkw_debug::cmd::exec::{Armed, ArmedList, Disassembly, MemoryDump, RegisterView, Stop};
 use rkw_debug::cmd::format::{self, render};
 use rkw_debug::cmd::parse::{Format, Unit};
-use rkw_debug::cmd::{Outcome, parse};
+use rkw_debug::cmd::{Frame, Listing, Located, Outcome, Site, parse};
 use rkw_debug::condition::{Cmp, Condition, Operand};
 use rkw_debug::{Access, Request, StopReason};
 use z80::disasm::{Flow, Instruction};
@@ -32,6 +32,7 @@ fn stop(reason: StopReason) -> Stop {
         t: 1234,
         instructions: 7,
         next: instruction(0x8002, &[0x00], "NOP"),
+        at: None,
     }
 }
 
@@ -332,7 +333,7 @@ fn a_rendered_condition_parses_back_to_itself() {
         assert_eq!(
             parsed,
             Request::Break {
-                addr: rkw_debug::cmd::Addr::abs(0x8000),
+                at: rkw_debug::cmd::Place::At(rkw_debug::cmd::Addr::abs(0x8000)),
                 condition: Some(condition),
             },
             "{line}"
@@ -348,4 +349,125 @@ fn help_lists_every_command_the_parser_knows() {
     ] {
         assert!(text.contains(name), "{name} is missing from help");
     }
+}
+
+// ---- Source ---------------------------------------------------------------
+
+fn breakpoint(id: u32, addr: u16) -> Breakpoint {
+    Breakpoint {
+        id,
+        addr,
+        enabled: true,
+        condition: None,
+        hits: 0,
+        ignore: 0,
+    }
+}
+
+fn located() -> Located {
+    Located {
+        file: "src/mac.asm".into(),
+        line: 3,
+        column: 9,
+        text: Some("        nop".into()),
+        frames: vec![Frame {
+            name: "twice".into(),
+            file: "src/main.asm".into(),
+            line: 6,
+            column: 9,
+        }],
+        stale: false,
+    }
+}
+
+#[test]
+fn a_stop_inside_a_macro_shows_the_line_and_the_invocation_that_reached_it() {
+    let mut stop = stop(StopReason::Breakpoint {
+        id: 1,
+        addr: 0x8002,
+    });
+    stop.at = Some(located());
+    assert_eq!(
+        render(&Outcome::Stopped(stop)),
+        "Breakpoint 1 at $8002\n\
+         src/mac.asm:3          nop\n   \
+            in macro `twice`, invoked at src/main.asm:6\n\
+         => 8002  00           NOP\n   \
+            T=1234 after 7 instructions"
+    );
+}
+
+#[test]
+fn a_stop_whose_source_has_moved_on_says_so_where_it_shows_it() {
+    let mut stop = stop(StopReason::Step);
+    stop.at = Some(Located {
+        frames: Vec::new(),
+        stale: true,
+        ..located()
+    });
+    let text = render(&Outcome::Stopped(stop));
+    assert!(text.contains(format::STALE), "{text}");
+}
+
+#[test]
+fn a_breakpoint_on_a_line_reports_one_per_address_it_produced() {
+    let site = Site {
+        file: "src/mac.asm".into(),
+        requested: 3,
+        line: 3,
+        addresses: vec![0x8002, 0x8003],
+    };
+    assert_eq!(
+        render(&Outcome::Armed(Armed::Source {
+            breakpoints: vec![breakpoint(1, 0x8002), breakpoint(2, 0x8003)],
+            site,
+        })),
+        "Breakpoint 1 at $8002 (src/mac.asm:3)\n\
+         Breakpoint 2 at $8003 (src/mac.asm:3)"
+    );
+}
+
+#[test]
+fn a_breakpoint_that_moved_to_a_later_line_says_which_line_it_is_on() {
+    let site = Site {
+        file: "src/main.asm".into(),
+        requested: 5,
+        line: 9,
+        addresses: vec![0x8004],
+    };
+    assert_eq!(
+        render(&Outcome::Armed(Armed::Source {
+            breakpoints: vec![breakpoint(1, 0x8004)],
+            site,
+        })),
+        "src/main.asm:5 produced no code; using line 9.\n\
+         Breakpoint 1 at $8004 (src/main.asm:9)"
+    );
+}
+
+#[test]
+fn a_listing_numbers_its_lines_and_marks_the_current_one() {
+    assert_eq!(
+        render(&Outcome::Source(Listing {
+            file: "src/main.asm".into(),
+            first: 3,
+            lines: vec!["".into(), "main:   ld a,42".into()],
+            current: Some(4),
+            stale: false,
+        })),
+        "src/main.asm\n\
+        \x20     3  \n\
+         =>    4  main:   ld a,42"
+    );
+
+    // Nothing to show is said rather than rendered as a blank.
+    let empty = render(&Outcome::Source(Listing {
+        file: "src/main.asm".into(),
+        first: 99,
+        lines: Vec::new(),
+        current: None,
+        stale: true,
+    }));
+    assert!(empty.contains(format::STALE), "{empty}");
+    assert!(empty.ends_with("(nothing there)"), "{empty}");
 }

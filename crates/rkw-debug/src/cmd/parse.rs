@@ -19,15 +19,22 @@ use z80::{Reg8, Reg16, flag};
 /// A register base is what makes `x/16 hl` and `disas pc-8` work, and it is
 /// resolved at execution time against the registers as they are then — so a
 /// script that examines `hl` means the `hl` of the moment it runs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// A symbol is resolved there too, and for the same reason: what `main` is
+/// worth is a property of the program that was loaded, which the parser has
+/// never been shown. That is what keeps this a pure function of the line.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Base {
     Abs(u16),
     Reg(Reg16),
     Pc,
+    /// A name from the debug info, spelled as it was typed: symbols are
+    /// case-sensitive, because the assembler's are.
+    Symbol(String),
 }
 
-/// A base plus a signed offset: `$8000`, `hl`, `pc-8`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A base plus a signed offset: `$8000`, `hl`, `pc-8`, `main+3`.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Addr {
     pub base: Base,
     pub offset: i32,
@@ -40,6 +47,25 @@ impl Addr {
             offset: 0,
         }
     }
+
+    pub fn symbol(name: impl Into<String>) -> Addr {
+        Addr {
+            base: Base::Symbol(name.into()),
+            offset: 0,
+        }
+    }
+}
+
+/// Somewhere in a program, named either way round.
+///
+/// An address names one place. A source line names as many as it produced,
+/// which is why `break` takes this and not an [`Addr`]: a line inside a macro
+/// used five times is five breakpoints, and setting one of them would be a
+/// debugger that stopped four times out of five.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Place {
+    At(Addr),
+    Source { file: String, line: u32 },
 }
 
 /// How `x` renders what it read.
@@ -86,7 +112,7 @@ pub enum Info {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Request {
     Break {
-        addr: Addr,
+        at: Place,
         condition: Option<Condition>,
     },
     /// Empty means everything, as gdb's `delete` does.
@@ -130,6 +156,8 @@ pub enum Request {
     /// recorded history of ticket 0022.
     Trace(u32),
     Info(Info),
+    /// Show source around somewhere: `list`, `list main`, `list main.asm:42`.
+    List(Option<Place>),
     Poke {
         addr: Addr,
         value: u8,
@@ -159,8 +187,10 @@ impl std::error::Error for ParseError {}
 
 /// Every command, with the one-line summary `help` prints. The parser owns
 /// this because the parser is what decides the names.
+/// A place is an address, a symbol, or `FILE:LINE`; an address is `$hex`,
+/// `0xhex`, `%binary` or decimal, optionally through a register and offset.
 pub const HELP: &[(&str, &str)] = &[
-    ("break ADDR [if COND]", "set an execution breakpoint"),
+    ("break PLACE [if COND]", "set an execution breakpoint"),
     ("delete [ID...]", "remove breakpoints, or all of them"),
     ("enable/disable [ID...]", "arm or disarm without removing"),
     ("watch ADDR", "stop when a write changes ADDR"),
@@ -176,6 +206,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("regs", "registers, flags and interrupt state"),
     ("x/NFU ADDR", "dump memory: count, format xdutcs, unit bw"),
     ("disas [ADDR] [N]", "disassemble, marking PC"),
+    ("list [PLACE]", "show source around somewhere"),
     ("trace [N]", "step N instructions, showing each"),
     (
         "info breakpoints|registers",
@@ -241,6 +272,7 @@ struct Token {
 
 const PUNCT: &[&str] = &[
     "==", "!=", "<=", ">=", "&&", "||", "<", ">", "!", "(", ")", "[", "]", "/", "+", "-", ",", "=",
+    ":",
 ];
 
 fn lex(line: &str) -> Result<Vec<Token>, ParseError> {
@@ -268,7 +300,11 @@ fn lex(line: &str) -> Result<Vec<Token>, ParseError> {
             i = next;
             continue;
         }
-        if c.is_ascii_alphabetic() || c == '_' {
+        // A leading `.` is a local label, and the case a word was typed in is
+        // kept: command names and register names are matched without regard to
+        // it, and a symbol is matched with, because the assembler's symbols
+        // are case-sensitive and `Draw` and `draw` are two labels.
+        if c.is_ascii_alphabetic() || c == '_' || c == '.' {
             let start = i;
             while i < bytes.len() {
                 let c = bytes[i] as char;
@@ -279,7 +315,7 @@ fn lex(line: &str) -> Result<Vec<Token>, ParseError> {
                 }
             }
             tokens.push(Token {
-                tok: Tok::Word(line[start..i].to_ascii_lowercase()),
+                tok: Tok::Word(line[start..i].to_string()),
                 col,
             });
             continue;
@@ -380,9 +416,9 @@ impl Parser<'_> {
         self.i += 1;
     }
 
-    /// Consume the next token if it is this word.
+    /// Consume the next token if it is this word, however it was capitalised.
     fn eat_word(&mut self, word: &str) -> bool {
-        if matches!(self.peek(), Some(Tok::Word(w)) if w == word) {
+        if matches!(self.peek(), Some(Tok::Word(w)) if w.eq_ignore_ascii_case(word)) {
             self.advance();
             return true;
         }
@@ -433,7 +469,7 @@ impl Parser<'_> {
         let Some(name) = self.word() else {
             return self.error("expected a command");
         };
-        match name.as_str() {
+        match name.to_ascii_lowercase().as_str() {
             "break" | "b" | "br" => self.parse_break(),
             "delete" | "del" | "d" => Ok(Request::Delete(self.ids()?)),
             "enable" => Ok(Request::Enable(self.ids()?)),
@@ -465,6 +501,7 @@ impl Parser<'_> {
             "x" => self.parse_examine(),
             "disas" | "disassemble" | "dis" => self.parse_disas(),
             "trace" | "t" => Ok(Request::Trace(self.count(16)?)),
+            "list" | "l" => Ok(Request::List(self.optional_place()?)),
             "info" | "i" => self.parse_info(),
             "poke" => self.parse_poke(),
             "help" | "h" => Ok(Request::Help),
@@ -477,13 +514,13 @@ impl Parser<'_> {
     }
 
     fn parse_break(&mut self) -> Result<Request, ParseError> {
-        let addr = self.addr()?;
+        let at = self.place()?;
         let condition = if self.eat_word("if") {
             Some(self.condition()?)
         } else {
             None
         };
-        Ok(Request::Break { addr, condition })
+        Ok(Request::Break { at, condition })
     }
 
     fn parse_port_watch(&mut self) -> Result<Request, ParseError> {
@@ -494,7 +531,8 @@ impl Parser<'_> {
             // literal reading of "watch this port".
             _ => 0xFFFF,
         };
-        let (on_in, on_out) = match self.word().as_deref() {
+        let direction = self.word().map(|w| w.to_ascii_lowercase());
+        let (on_in, on_out) = match direction.as_deref() {
             None => (true, true),
             Some("in") => (true, false),
             Some("out") => (false, true),
@@ -528,7 +566,7 @@ impl Parser<'_> {
             {
                 let letters_at = self.tokens[self.i - 1].col;
                 for (n, c) in letters.chars().enumerate() {
-                    match c {
+                    match c.to_ascii_lowercase() {
                         'x' => format = Format::Hex,
                         'd' => format = Format::Dec,
                         'u' => format = Format::Unsigned,
@@ -567,7 +605,8 @@ impl Parser<'_> {
     }
 
     fn parse_info(&mut self) -> Result<Request, ParseError> {
-        match self.word().as_deref() {
+        let what = self.word().map(|w| w.to_ascii_lowercase());
+        match what.as_deref() {
             Some("breakpoints") | Some("break") | Some("b") | Some("watchpoints") | Some("w")
             | None => Ok(Request::Info(Info::Breakpoints)),
             Some("registers") | Some("regs") | Some("r") => Ok(Request::Info(Info::Registers)),
@@ -632,32 +671,81 @@ impl Parser<'_> {
 
     fn optional_addr(&mut self) -> Result<Option<Addr>, ParseError> {
         match self.peek() {
-            Some(Tok::Num(_)) => Ok(Some(self.addr()?)),
-            Some(Tok::Word(w)) if base_named(w).is_some() => Ok(Some(self.addr()?)),
+            Some(Tok::Num(_)) | Some(Tok::Word(_)) => Ok(Some(self.addr()?)),
             _ => Ok(None),
         }
     }
 
-    /// `$8000`, `hl`, `pc-8`, `ix+4`.
+    fn optional_place(&mut self) -> Result<Option<Place>, ParseError> {
+        match self.peek() {
+            Some(Tok::Num(_)) | Some(Tok::Word(_)) => Ok(Some(self.place()?)),
+            _ => Ok(None),
+        }
+    }
+
+    fn place(&mut self) -> Result<Place, ParseError> {
+        match self.source_place()? {
+            Some(place) => Ok(place),
+            None => Ok(Place::At(self.addr()?)),
+        }
+    }
+
+    /// `FILE:LINE`, taken from the raw line rather than from the tokens.
+    ///
+    /// A path is made of characters the command lexer takes apart — `/`, `-`,
+    /// `..` — and reassembling one from the pieces would be guessing where the
+    /// spaces were not. So the spec is the next run of non-space characters,
+    /// and it is one of these only if it ends in `:` and digits; anything else
+    /// falls through to being an address, which is what `list 42` is.
+    fn source_place(&mut self) -> Result<Option<Place>, ParseError> {
+        if self.at_end() {
+            return Ok(None);
+        }
+        let start = self.column();
+        let rest = &self.line[start..];
+        let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        let spec = &rest[..end];
+        let Some((file, digits)) = spec.rsplit_once(':') else {
+            return Ok(None);
+        };
+        if file.is_empty() || digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            return Ok(None);
+        }
+        let line: u32 = digits.parse().map_err(|_| ParseError {
+            message: format!("`{digits}` is not a line number"),
+            column: start + file.len() + 1,
+        })?;
+        if line == 0 {
+            return Err(ParseError {
+                message: "lines are numbered from 1".into(),
+                column: start + file.len() + 1,
+            });
+        }
+        // The spec was read from the text, so the tokens it was lexed into
+        // have to be stepped over by hand.
+        while self.tokens.get(self.i).is_some_and(|t| t.col < start + end) {
+            self.advance();
+        }
+        Ok(Some(Place::Source {
+            file: file.to_string(),
+            line,
+        }))
+    }
+
+    /// `$8000`, `hl`, `pc-8`, `ix+4`, `main`, `screen_buffer+2`.
     fn addr(&mut self) -> Result<Addr, ParseError> {
-        let column = self.column();
-        let base = match self.peek() {
+        let base = match self.peek().cloned() {
             Some(Tok::Num(_)) => {
                 let value = self.u16_value()?;
                 Base::Abs(value)
             }
-            Some(Tok::Word(w)) => match base_named(w) {
-                Some(base) => {
-                    self.advance();
-                    base
-                }
-                None => {
-                    return Err(ParseError {
-                        message: format!("`{w}` is not an address or a register"),
-                        column,
-                    });
-                }
-            },
+            // Anything that is not a register is a symbol. Whether the program
+            // has one by that name is the executor's business, exactly as
+            // whether $8002 is a sensible address is.
+            Some(Tok::Word(w)) => {
+                self.advance();
+                base_named(&w.to_ascii_lowercase()).unwrap_or(Base::Symbol(w))
+            }
             _ => return self.error("expected an address"),
         };
         let mut offset = 0i32;
@@ -766,19 +854,24 @@ impl Parser<'_> {
             }
             Some(Tok::Word(w)) => {
                 self.advance();
+                let key = w.to_ascii_lowercase();
                 // `w[...]` is the sixteen-bit read; the bare form is a byte.
-                if w == "w" && self.eat_punct("[") {
+                if key == "w" && self.eat_punct("[") {
                     return self.memory_operand(true, column);
                 }
-                if let Some(mask) = flag_named(&w) {
+                if let Some(mask) = flag_named(&key) {
                     return Ok(Operand::Flag(mask));
                 }
-                if let Some(r) = reg8_named(&w) {
+                if let Some(r) = reg8_named(&key) {
                     return Ok(Operand::Reg8(r));
                 }
-                if let Some(r) = reg16_named(&w) {
+                if let Some(r) = reg16_named(&key) {
                     return Ok(Operand::Reg16(r));
                 }
+                // Symbols do not reach here: a condition is evaluated on the
+                // emulation thread against registers and memory, and nothing
+                // there can look a name up. `break main if a == lives` is a
+                // breakpoint at a symbol with a condition that is not one.
                 Err(ParseError {
                     message: format!("`{w}` is not a register, flag or number"),
                     column,
@@ -805,7 +898,7 @@ impl Parser<'_> {
             }
             Some(Tok::Word(w)) => {
                 self.advance();
-                let Some(r) = reg16_named(&w) else {
+                let Some(r) = reg16_named(&w.to_ascii_lowercase()) else {
                     return Err(ParseError {
                         message: format!("`{w}` is not a register pair"),
                         column: inner_column,

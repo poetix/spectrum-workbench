@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 rkw-asm = { path = "../rkw-asm" }
+rkw-dbginfo = { path = "../rkw-dbginfo" }
 rkw-debug = { path = "../rkw-debug" }
 z80 = { path = "../z80" }
 

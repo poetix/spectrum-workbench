@@ -12,6 +12,8 @@ use core::fmt::{self, Write as _};
 
 use z80::{Reg8, Reg16, Regs, flag};
 
+use rkw_dbginfo::{Listing, Located, Site};
+
 use super::exec::{
     Armed, ArmedList, Disassembly, MemoryDump, Outcome, RegisterView, Stop, StringAt, Trace,
 };
@@ -54,6 +56,7 @@ pub fn write_outcome<W: fmt::Write>(w: &mut W, outcome: &Outcome) -> fmt::Result
             write!(w, "{verb} {}.", id_list(ids))
         }
         Outcome::List(list) => write_list(w, list),
+        Outcome::Source(listing) => write_listing(w, listing),
         Outcome::Trace(trace) => write_trace(w, trace),
         Outcome::Poked { addr, old, new } => {
             write!(w, "${addr:04X}: ${old:02X} -> ${new:02X}")
@@ -116,12 +119,66 @@ fn write_stop<W: fmt::Write>(w: &mut W, stop: &Stop) -> fmt::Result {
         StopReason::Paused => writeln!(w, "Paused.")?,
         StopReason::OutOfBudget => writeln!(w, "Run limit reached; the machine is still there.")?,
     }
+    if let Some(at) = &stop.at {
+        write_located(w, at)?;
+    }
     write!(w, "=> {}", stop.next.listing_line())?;
     write!(
         w,
         "\n   T={} after {} instructions",
         stop.t, stop.instructions
     )
+}
+
+/// Where a stop is in source: the position, the line itself, and the macro
+/// invocations that led there.
+///
+/// The expansion chain is the part that is worth the space. Inside a macro the
+/// line shown is in the macro body, which is written once and may have been
+/// reached from twenty places; without the invocation the reader is looking at
+/// the right text and has no idea which call produced it.
+fn write_located<W: fmt::Write>(w: &mut W, at: &Located) -> fmt::Result {
+    write!(w, "{}:{}", at.file, at.line)?;
+    if let Some(text) = &at.text {
+        write!(w, "  {}", text.trim_end())?;
+    }
+    writeln!(w)?;
+    for frame in &at.frames {
+        writeln!(
+            w,
+            "   in macro `{}`, invoked at {}:{}",
+            frame.name, frame.file, frame.line
+        )?;
+    }
+    if at.stale {
+        writeln!(w, "   {STALE}")?;
+    }
+    Ok(())
+}
+
+/// Said wherever source text is shown for a program whose source has been
+/// edited since it was assembled. The addresses are still right; the text
+/// beside them is what makes it worth saying.
+pub const STALE: &str = "(the source has changed since this was assembled)";
+
+fn write_listing<W: fmt::Write>(w: &mut W, listing: &Listing) -> fmt::Result {
+    write!(w, "{}", listing.file)?;
+    if listing.stale {
+        write!(w, "  {STALE}")?;
+    }
+    if listing.lines.is_empty() {
+        return write!(w, "\n   (nothing there)");
+    }
+    for (offset, text) in listing.lines.iter().enumerate() {
+        let number = listing.first + offset as u32;
+        let marker = if Some(number) == listing.current {
+            "=>"
+        } else {
+            "  "
+        };
+        write!(w, "\n{marker} {number:>4}  {}", text.trim_end())?;
+    }
+    Ok(())
 }
 
 // ---- Registers -----------------------------------------------------------
@@ -308,6 +365,7 @@ fn write_disassembly<W: fmt::Write>(w: &mut W, dis: &Disassembly) -> fmt::Result
 fn write_armed<W: fmt::Write>(w: &mut W, armed: &Armed) -> fmt::Result {
     match armed {
         Armed::Breakpoint(b) => write!(w, "Breakpoint {} at ${:04X}{}", b.id, b.addr, suffix(b)),
+        Armed::Source { site, breakpoints } => write_armed_at(w, site, breakpoints),
         Armed::Watchpoint(p) => write!(
             w,
             "Watchpoint {} at ${:04X} on {}",
@@ -324,6 +382,34 @@ fn write_armed<W: fmt::Write>(w: &mut W, armed: &Armed) -> fmt::Result {
             p.mask
         ),
     }
+}
+
+/// One line per breakpoint, because a source line inside a macro produced one
+/// address per expansion and the reader is about to wonder why the machine
+/// stopped somewhere that is not where they were looking.
+fn write_armed_at<W: fmt::Write>(w: &mut W, site: &Site, armed: &[Breakpoint]) -> fmt::Result {
+    if site.moved() {
+        writeln!(
+            w,
+            "{}:{} produced no code; using line {}.",
+            site.file, site.requested, site.line
+        )?;
+    }
+    for (i, b) in armed.iter().enumerate() {
+        if i > 0 {
+            writeln!(w)?;
+        }
+        write!(
+            w,
+            "Breakpoint {} at ${:04X} ({}:{}){}",
+            b.id,
+            b.addr,
+            site.file,
+            site.line,
+            suffix(b)
+        )?;
+    }
+    Ok(())
 }
 
 fn suffix(b: &Breakpoint) -> String {
