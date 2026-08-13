@@ -11,8 +11,9 @@ ROM with tape loading and saving, screen output and sound.
 the assembler is finished: it turns source into Z80 machine code that runs on
 it, with macros, conditional assembly, a listing and debug information. The
 debugger works — breakpoints, watchpoints, stepping, source-level breakpoints
-and listings, and a gdb-style REPL that assembles a file and runs it — but
-nothing runs a Spectrum yet, so there is no screen, no keyboard and no tape.
+and listings, and a gdb-style REPL that assembles a file and runs it. The first
+hardware is there: the 48K memory map, the screen and the frame interrupt. There
+is no keyboard, no sound and no tape yet, and nothing has booted a ROM.
 
 ## What works
 
@@ -152,6 +153,30 @@ assembler to read one could not debug a program the assembler did not build.
 Source that has been edited since it was assembled is reported rather than shown
 as if it ran.
 
+### The Spectrum
+
+`rkw-spectrum` is the machine the CPU runs inside: the 48K memory map, where a
+write below `0x4000` does nothing, and the ULA — the 50 Hz frame interrupt, the
+flash cadence, the border and the display.
+
+The display file's interleaved layout is decoded from a byte source and a base
+address rather than from the live machine
+([ADR-0020](adr/0020-render-the-screen-from-a-byte-source.md)), with the flash
+phase as a parameter. So the screen at `0x4000`, a back buffer a game is drawing
+into, a `.scr` file and a screen out of a snapshot are the same code with
+different arguments — which is what the debugger's screen pane needs, and what
+lets a test hash a picture without running a machine to a particular frame.
+
+The border is recorded as one colour per scanline rather than as a colour,
+because a program that writes a different colour every line gets stripes and
+that trick is how a great deal of Spectrum software makes its timing visible.
+The frame interrupt is derived from the clock rather than raised as a flag, so a
+machine stepped across a frame boundary in the debugger sees exactly what a
+free-running one does.
+
+Contention is not here — that is ticket 0020, and ADR-0002 means it is a change
+to the `Bus` implementation and to nothing else.
+
 ### Driving it
 
 `rkwdbg` is the terminal front end: it assembles a source file, loads it, and
@@ -227,6 +252,7 @@ crates/
   rkw-cli/        rkwdbg: the terminal front end
   rkw-dbginfo/    the debug info format, and source resolution over it
   rkw-debug/      debugger core, emulation thread, command layer
+  rkw-spectrum/   the 48K machine: memory map, ULA, screen
   z80/            CPU core and disassembler
 adr/              architecture decision records
 docs/
@@ -239,8 +265,8 @@ scripts/
   fetch-testdata.sh
 ```
 
-Planned: `rkw-spectrum` (ULA, memory map, tape), `rkw-dap` (Debug Adapter
-Protocol front end), `rkw-gui`.
+Planned: `rkw-dap` (Debug Adapter Protocol front end), `rkw-gui`. Tape, sound
+and the keyboard join `rkw-spectrum`.
 
 ## Design
 

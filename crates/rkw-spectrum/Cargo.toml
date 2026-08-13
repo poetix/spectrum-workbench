@@ -1,0 +1,22 @@
+[package]
+name = "rkw-spectrum"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "The 48K Spectrum: memory map, ULA, screen and frame timing"
+
+[dependencies]
+# The `Machine` trait the emulation thread runs against (ADR-0007). The
+# dependency points this way because the ULA is what implements the schedule
+# the slice loop asks about, and the debugger cannot be made to know about
+# hardware it is meant to outlive.
+rkw-debug = { path = "../rkw-debug" }
+z80 = { path = "../z80" }
+
+[dev-dependencies]
+alloc-check = { path = "../alloc-check" }
+
+[lints]
+workspace = true

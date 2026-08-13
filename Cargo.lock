@@ -45,6 +45,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rkw-spectrum"
+version = "0.1.0"
+dependencies = [
+ "alloc-check",
+ "rkw-debug",
+ "z80",
+]
+
+[[package]]
 name = "z80"
 version = "0.1.0"
 dependencies = [

@@ -6,6 +6,7 @@ members = [
     "crates/rkw-cli",
     "crates/rkw-dbginfo",
     "crates/rkw-debug",
+    "crates/rkw-spectrum",
     "crates/z80",
 ]
 
