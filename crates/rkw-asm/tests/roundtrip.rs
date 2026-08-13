@@ -202,6 +202,20 @@ fn the_encoding_of_a_known_instruction_is_the_documented_one() {
     }
 }
 
+/// sjasmplus documents all three as accepted spellings of `EX AF,AF'`, and
+/// sources do use them — the apostrophe is awkward to type and awkward to lex.
+/// Ticket 0030.
+#[test]
+fn the_shadow_exchange_has_four_spellings() {
+    for text in ["EX AF,AF'", "EX AF,AF", "EX AF", "EXA"] {
+        assert_eq!(
+            assemble_one(text, ORG).expect("assembles"),
+            [0x08],
+            "{text}"
+        );
+    }
+}
+
 #[test]
 fn a_relative_jump_is_encoded_as_a_distance() {
     // `JR $8002` from $8000 goes nowhere: the CPU has already advanced past the

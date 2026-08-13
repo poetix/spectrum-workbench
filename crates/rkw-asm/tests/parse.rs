@@ -132,6 +132,22 @@ fn a_mnemonic_in_column_one_is_not_a_label() {
     assert_eq!(stmt.label.map(|l| l.name.to_string()), Some("ld".into()));
 }
 
+/// The dot form belongs to the directives: sjasmplus has `.db` but no `.ld`,
+/// and real sources name local labels after the instruction under test. Ticket
+/// 0030 — reading `.scf` as `SCF` lost the label and misparsed the line.
+#[test]
+fn a_dot_prefixed_mnemonic_in_column_one_is_a_local_label() {
+    let stmt = statement(".scf    db 1");
+    assert_eq!(stmt.label.map(|l| l.name.to_string()), Some(".scf".into()));
+    assert_eq!(stmt.op.map(|o| o.name.to_string()), Some("db".into()));
+
+    // A macro call after such a label is the case that made this visible: the
+    // parser cannot know `flags` is a macro, so the label has to be right.
+    let stmt = statement(".ccf    flags 1,2");
+    assert_eq!(stmt.label.map(|l| l.name.to_string()), Some(".ccf".into()));
+    assert_eq!(stmt.op.map(|o| o.args.len()), Some(2));
+}
+
 #[test]
 fn label_and_instruction_on_one_line() {
     let stmt = statement("start:  ld a,1");

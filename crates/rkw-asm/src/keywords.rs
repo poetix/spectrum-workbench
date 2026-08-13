@@ -20,7 +20,7 @@ use std::sync::OnceLock;
 /// Every mnemonic the disassembler can emit, including the undocumented ones.
 const MNEMONICS: &[&str] = &[
     "ADC", "ADD", "AND", "BIT", "CALL", "CCF", "CP", "CPD", "CPDR", "CPI", "CPIR", "CPL", "DAA",
-    "DEC", "DI", "DJNZ", "EI", "EX", "EXX", "HALT", "IM", "IN", "INC", "IND", "INDR", "INI",
+    "DEC", "DI", "DJNZ", "EI", "EX", "EXA", "EXX", "HALT", "IM", "IN", "INC", "IND", "INDR", "INI",
     "INIR", "JP", "JR", "LD", "LDD", "LDDR", "LDI", "LDIR", "NEG", "NOP", "OR", "OTDR", "OTIR",
     "OUT", "OUTD", "OUTI", "POP", "PUSH", "RES", "RET", "RETI", "RETN", "RL", "RLA", "RLC", "RLCA",
     "RLD", "RR", "RRA", "RRC", "RRCA", "RRD", "RST", "SBC", "SCF", "SET", "SLA", "SLI", "SLL",
@@ -131,12 +131,20 @@ fn table() -> &'static HashSet<&'static str> {
     TABLE.get_or_init(|| MNEMONICS.iter().chain(DIRECTIVES).copied().collect())
 }
 
+fn directives() -> &'static HashSet<&'static str> {
+    static TABLE: OnceLock<HashSet<&'static str>> = OnceLock::new();
+    TABLE.get_or_init(|| DIRECTIVES.iter().copied().collect())
+}
+
 /// True if `name` starts a statement rather than being a label.
 ///
-/// Case-insensitive, and a leading `.` is ignored: sjasmplus accepts `.db` as
-/// well as `db`, which is also why `.loop` in column 1 is a local label — it is
-/// only a directive if the rest of it is one.
+/// Case-insensitive. A leading `.` is ignored for directives, because
+/// sjasmplus accepts `.db` as well as `db`, but not for mnemonics: there is no
+/// `.ld` form, and real sources name their local labels after the instruction
+/// under test. `.scf` in column 1 is the label, not `SCF`.
 pub fn is_op_name(name: &str) -> bool {
-    let bare = name.strip_prefix('.').unwrap_or(name);
-    table().contains(bare.to_ascii_uppercase().as_str())
+    match name.strip_prefix('.') {
+        Some(bare) => directives().contains(bare.to_ascii_uppercase().as_str()),
+        None => table().contains(name.to_ascii_uppercase().as_str()),
+    }
 }

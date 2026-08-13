@@ -319,6 +319,24 @@ fn a_symbol_from_an_included_file_is_usable_and_keeps_its_own_file_in_errors() {
     assert!(reported.file.ends_with("main.asm"), "{reported}");
 }
 
+/// `INCLUDE MORE.I` as well as `INCLUDE "MORE.I"`, both of which sjasmplus
+/// documents. Ticket 0030 — the unquoted form was rejected outright, which is
+/// the spelling most real sources use.
+#[test]
+fn an_include_filename_need_not_be_quoted() {
+    let dir = directory("include-unquoted");
+    write(&dir, "main.asm", "    db 1\n    include other.asm\n");
+    write(&dir, "other.asm", "    db 2\n");
+
+    let (map, assembled) = assemble_file(&dir.join("main.asm"));
+    assert!(
+        assembled.diagnostics.is_empty(),
+        "{}",
+        map.render_all(&assembled.diagnostics)
+    );
+    assert_eq!(assembled.image.to_binary(), [1, 2]);
+}
+
 #[test]
 fn an_include_cycle_is_reported_with_its_chain() {
     let dir = directory("include-cycle");

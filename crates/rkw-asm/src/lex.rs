@@ -754,9 +754,8 @@ fn split_radix(cleaned: &str) -> (&str, u32, &'static str) {
     if let Some(body) = cleaned.strip_suffix(['o', 'O', 'q', 'Q']) {
         return (body, 8, "octal");
     }
-    if let Some(body) = cleaned.strip_suffix(['d', 'D']) {
-        return (body, 10, "decimal");
-    }
+    // Prefixes are examined before the `d` suffix, because every second byte of
+    // a hex table ends in one: `0xbd` is hexadecimal, not decimal `0x` + `bd`.
     if let Some(rest) = cleaned.strip_prefix('0') {
         if let Some(body) = rest.strip_prefix(['x', 'X']) {
             return (body, 16, "hexadecimal");
@@ -769,6 +768,9 @@ fn split_radix(cleaned: &str) -> (&str, u32, &'static str) {
                 return (body, 2, "binary");
             }
         }
+    }
+    if let Some(body) = cleaned.strip_suffix(['d', 'D']) {
+        return (body, 10, "decimal");
     }
     (cleaned, 10, "decimal")
 }

@@ -983,16 +983,21 @@ impl Assembler<'_> {
     /// that names it rather than the process working directory.
     fn path_argument(&mut self, args: &[Expr], span: Span, state: &mut State) -> Option<PathBuf> {
         let Some(arg) = args.first() else {
-            state.error(span, "expected a file name in quotes");
+            state.error(span, "expected a file name");
             return None;
         };
-        let ExprKind::Str(literal) = &arg.kind else {
-            state.error(arg.span, "expected a file name in quotes");
-            return None;
-        };
-        let Ok(text) = std::str::from_utf8(&literal.value) else {
-            state.error(arg.span, "file name is not valid UTF-8");
-            return None;
+        // An unquoted name is taken from the source as written: sjasmplus
+        // accepts `INCLUDE MORE.I` as well as the quoted form, and what the
+        // expression parser made of those characters is beside the point.
+        let text = match &arg.kind {
+            ExprKind::Str(literal) => match std::str::from_utf8(&literal.value) {
+                Ok(text) => text,
+                Err(_) => {
+                    state.error(arg.span, "file name is not valid UTF-8");
+                    return None;
+                }
+            },
+            _ => self.map.snippet(arg.span).trim(),
         };
 
         let relative = Path::new(text);

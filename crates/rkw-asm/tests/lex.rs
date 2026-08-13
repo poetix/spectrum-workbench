@@ -71,6 +71,21 @@ fn every_documented_numeric_form() {
     assert_eq!(number("14o"), 12);
 }
 
+/// A prefix beats a suffix that is also a hex digit. Half the bytes in a hex
+/// table end in `d`, and reading `0xbd` as decimal `0x` + `bd` made every one
+/// of them an error (ticket 0030).
+#[test]
+fn a_hex_prefix_survives_a_trailing_d() {
+    assert_eq!(number("0xd"), 0xD);
+    assert_eq!(number("0xbd"), 0xBD);
+    assert_eq!(number("0xBD"), 0xBD);
+    assert_eq!(number("0x12ad"), 0x12AD);
+    // Without the prefix a trailing `d` still means decimal, and `0d` is zero
+    // in decimal rather than a hexadecimal literal with no digits.
+    assert_eq!(number("12d"), 12);
+    assert_eq!(number("0d"), 0);
+}
+
 #[test]
 fn digit_separators_are_ignored() {
     assert_eq!(number("12'345"), 12345);

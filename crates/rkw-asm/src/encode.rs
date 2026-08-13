@@ -214,6 +214,7 @@ pub fn plan(op: &Op) -> Result<Plan, Diagnostic> {
         "DI" => fixed(args, &[0xF3]),
         "EI" => fixed(args, &[0xFB]),
         "EXX" => fixed(args, &[0xD9]),
+        "EXA" => fixed(args, &[0x08]),
         "RLCA" => fixed(args, &[0x07]),
         "RRCA" => fixed(args, &[0x0F]),
         "RLA" => fixed(args, &[0x17]),
@@ -762,11 +763,16 @@ fn rst(args: &[Expr]) -> Option<Plan> {
 }
 
 fn ex(args: &[Expr]) -> Option<Plan> {
+    // `EX AF` is one of the three spellings sjasmplus accepts for `EX AF,AF'`,
+    // along with `EX AF,AF` below and the `EXA` mnemonic.
+    if let [only] = args {
+        return named(only, "af").then(|| plan_of(vec![Byte::Fixed(0x08)]))?;
+    }
     let [first, second] = args else { return None };
     if named(first, "de") && named(second, "hl") {
         return plan_of(vec![Byte::Fixed(0xEB)]);
     }
-    if named(first, "af") && is_af_shadow(second) {
+    if named(first, "af") && (is_af_shadow(second) || named(second, "af")) {
         return plan_of(vec![Byte::Fixed(0x08)]);
     }
     if indirect(first, "sp") {
@@ -851,7 +857,7 @@ fn im(args: &[Expr]) -> Option<Plan> {
 /// call, which the parser cannot do.
 const MNEMONICS: &[&str] = &[
     "ADC", "ADD", "AND", "BIT", "CALL", "CCF", "CP", "CPD", "CPDR", "CPI", "CPIR", "CPL", "DAA",
-    "DEC", "DI", "DJNZ", "EI", "EX", "EXX", "HALT", "IM", "IN", "INC", "IND", "INDR", "INI",
+    "DEC", "DI", "DJNZ", "EI", "EX", "EXA", "EXX", "HALT", "IM", "IN", "INC", "IND", "INDR", "INI",
     "INIR", "JP", "JR", "LD", "LDD", "LDDR", "LDI", "LDIR", "NEG", "NOP", "OR", "OTDR", "OTIR",
     "OUT", "OUTD", "OUTI", "POP", "PUSH", "RES", "RET", "RETI", "RETN", "RL", "RLA", "RLC", "RLCA",
     "RLD", "RR", "RRA", "RRC", "RRCA", "RRD", "RST", "SBC", "SCF", "SET", "SLA", "SLI", "SLL",
