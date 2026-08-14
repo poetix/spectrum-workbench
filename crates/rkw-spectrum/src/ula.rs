@@ -4,8 +4,8 @@
 //! time it is within the frame, the 50 Hz interrupt that starts each one, the
 //! flash cadence, the border colour, and both halves of port `0xFE` — the byte
 //! written, whose low three bits are the border, and the byte read, which is
-//! the keyboard and the `EAR` line. The speaker is 0014 and contention is 0020;
-//! both read state this already keeps.
+//! the keyboard and the `EAR` line. Contention is 0020, and reads state this
+//! already keeps.
 //!
 //! # Port `0xFE` is two different registers
 //!
@@ -35,6 +35,27 @@
 //! They exist, they need the T-state position within the line, and they need
 //! contention (0020) to be worth having.
 //!
+//! # The speaker is a log for the same reason, and is not double-buffered
+//!
+//! Bits 4 and 3 of the same write are the speaker and the `MIC` output, and
+//! they are recorded the same way and for the same reason: what a program does
+//! with the speaker is entirely a matter of *when*, and a level held is silent
+//! however high it is held. So a write that moves either bit appends to an
+//! [`EdgeLog`] with its T-state, and 20 ms of sound is a few hundred words
+//! rather than 69,888 samples of a bit.
+//!
+//! The border is double-buffered because it is rendered later, on another
+//! thread, from a frame that has to have stopped changing. The speaker is not,
+//! because it is drained where it is made — inside the same `service_event`
+//! that ends the frame, before [`Ula::end_frame`] rolls the log on. There is
+//! no reader to race, so there is nothing to present to; a second buffer would
+//! be 8 KB more in every checkpoint ticket 0027 takes, and a memcpy a frame,
+//! to protect against a consumer that does not exist.
+//!
+//! Nothing here knows what a sample rate is. The log is the whole of the
+//! machine's part in this, and [`rkw_audio`] — which cannot name a `Spectrum`
+//! — is the rest (ADR-0021).
+//!
 //! # The interrupt is derived, not raised
 //!
 //! `INT` is asserted for [`INTERRUPT_LENGTH`] T-states at the top of every
@@ -45,6 +66,8 @@
 //! free-running one does; and the CPU accepting the interrupt does not clear
 //! the line, exactly as on the hardware, where what stops a second one being
 //! taken is `IFF1` going down.
+
+use rkw_audio::{EdgeLog, Levels};
 
 use crate::frame::{INTERRUPT_LENGTH, LINES_PER_FRAME, T_STATES_PER_FRAME, line_of};
 use crate::keyboard::Keyboard;
@@ -73,8 +96,11 @@ pub struct Ula {
     /// (ticket 0016). High with nothing plugged in.
     ear: bool,
     /// The last byte written to port `0xFE`, whole. Bits 0-2 are the border,
-    /// bit 3 the MIC output and bit 4 the speaker (ticket 0014).
+    /// bit 3 the MIC output and bit 4 the speaker.
     port_fe: u8,
+    /// Every move of bits 4 and 3 in the frame in progress, stamped with its
+    /// T-state. Drained once a frame by whoever is making sound out of it.
+    audio: EdgeLog,
     /// The border colour in force now, which is the low three bits of the
     /// above kept apart so the fill loop does not mask on every line.
     border: u8,
@@ -106,6 +132,7 @@ impl Ula {
             keyboard: Keyboard::new(),
             ear: true,
             port_fe: 0,
+            audio: EdgeLog::new(),
             border: 0,
             lines: [0; LINES_PER_FRAME],
             filled: 0,
@@ -118,6 +145,13 @@ impl Ula {
     /// A write to port `0xFE` at T-state `t`.
     pub fn write_port_fe(&mut self, t: u64, value: u8) {
         self.port_fe = value;
+
+        // Unclamped, unlike the border's line: an offset past the end of the
+        // frame is how the log carries an overrun into the next one, and a
+        // single step does not service the frame interrupt at all.
+        let tick = t.saturating_sub(self.frame_start).min(u32::MAX as u64) as u32;
+        self.audio.record(tick, Levels::from_port(value));
+
         let colour = value & 0x07;
         if colour != self.border {
             self.fill_to(self.line_now(t));
@@ -164,9 +198,18 @@ impl Ula {
         self.border
     }
 
-    /// The speaker bit, bit 4 of the last port `0xFE` write (ticket 0014).
+    /// The speaker bit, bit 4 of the last port `0xFE` write.
     pub fn speaker(&self) -> bool {
         self.port_fe & 0x10 != 0
+    }
+
+    /// The frame in progress' speaker edges: what to make this frame's sound
+    /// out of.
+    ///
+    /// Read it before [`Ula::end_frame`], which rolls the log on. Reading it
+    /// after gets the next frame, which at that point is empty.
+    pub fn audio(&self) -> &EdgeLog {
+        &self.audio
     }
 
     /// The MIC bit, bit 3, which is what tape saving drives (ticket 0016).
@@ -224,6 +267,7 @@ impl Ula {
         self.fill_to(LINES_PER_FRAME);
         self.presented = self.lines;
         self.filled = 0;
+        self.audio.roll(T_STATES_PER_FRAME as u32);
         self.frame_start += T_STATES_PER_FRAME;
         self.frames += 1;
     }
@@ -361,6 +405,124 @@ mod tests {
         // one, however late this one was closed.
         assert_eq!(ula.border_lines()[LINES_PER_FRAME - 1], 0);
         assert_eq!(frame_of(&mut ula)[0], 3);
+    }
+
+    /// The T-state of each edge in the frame in progress.
+    fn edge_ticks(ula: &Ula) -> Vec<u32> {
+        ula.audio()
+            .frame()
+            .0
+            .iter()
+            .copied()
+            .map(rkw_audio::tick_of)
+            .collect()
+    }
+
+    #[test]
+    fn a_speaker_write_is_recorded_at_the_t_state_it_was_made_at() {
+        let mut ula = Ula::new();
+        ula.write_port_fe(1000, 0x10);
+        ula.write_port_fe(2750, 0x00);
+        ula.write_port_fe(4500, 0x10);
+
+        assert_eq!(edge_ticks(&ula), vec![1000, 2750, 4500]);
+        assert_eq!(ula.audio().frame().1, Levels::default());
+        assert!(ula.speaker());
+    }
+
+    #[test]
+    fn a_border_write_that_leaves_the_speaker_alone_records_no_sound() {
+        // The striping trick: a colour a scanline, all frame, silently.
+        let mut ula = Ula::new();
+        for line in 0..LINES_PER_FRAME as u64 {
+            ula.write_port_fe(line * T_STATES_PER_LINE, (line % 8) as u8);
+        }
+        assert_eq!(edge_ticks(&ula), Vec::<u32>::new());
+
+        // And with the speaker held high throughout, still silently.
+        ula.write_port_fe(0, 0x10);
+        for line in 0..LINES_PER_FRAME as u64 {
+            ula.write_port_fe(line * T_STATES_PER_LINE, 0x10 | (line % 8) as u8);
+        }
+        assert_eq!(edge_ticks(&ula), vec![0]);
+    }
+
+    #[test]
+    fn the_mic_bit_is_recorded_as_well_as_the_speaker() {
+        let mut ula = Ula::new();
+        ula.write_port_fe(100, 0x08);
+        ula.write_port_fe(200, 0x18);
+        ula.write_port_fe(300, 0x10);
+
+        let (edges, _) = ula.audio().frame();
+        assert_eq!(
+            edges.iter().copied().map(rkw_audio::levels_of).collect::<Vec<_>>(),
+            vec![
+                Levels { speaker: false, mic: true },
+                Levels { speaker: true, mic: true },
+                Levels { speaker: true, mic: false },
+            ]
+        );
+    }
+
+    #[test]
+    fn ending_the_frame_clears_the_log_and_carries_the_level_over() {
+        let mut ula = Ula::new();
+        ula.write_port_fe(1000, 0x10);
+        assert_eq!(edge_ticks(&ula), vec![1000]);
+
+        ula.end_frame();
+        assert_eq!(edge_ticks(&ula), Vec::<u32>::new());
+        assert_eq!(
+            ula.audio().frame().1,
+            Levels { speaker: true, mic: false }
+        );
+    }
+
+    #[test]
+    fn a_speaker_write_past_the_end_of_the_frame_belongs_to_the_next_one() {
+        // The mirror of the border's version: a slice ends on the last
+        // instruction to start before its deadline, so the clock is past the
+        // boundary by the time the frame is ended.
+        let mut ula = Ula::new();
+        ula.write_port_fe(T_STATES_PER_FRAME + 17, 0x10);
+        ula.end_frame();
+
+        assert_eq!(edge_ticks(&ula), vec![17]);
+        // The frame that was ended was silent; the edge belongs to the one
+        // after it, which therefore opens with the speaker still low.
+        assert_eq!(ula.audio().frame().1, Levels::default());
+    }
+
+    #[test]
+    fn stepping_a_whole_frame_without_servicing_it_does_not_lose_the_edges() {
+        // `Command::Step` runs one instruction and never services the frame
+        // interrupt, so a user can step the clock past several boundaries
+        // before resuming. Each catch-up `end_frame` peels one frame off.
+        let mut ula = Ula::new();
+        ula.write_port_fe(50, 0x10);
+        ula.write_port_fe(T_STATES_PER_FRAME + 50, 0x00);
+        ula.write_port_fe(2 * T_STATES_PER_FRAME + 50, 0x10);
+
+        ula.end_frame();
+        assert_eq!(
+            edge_ticks(&ula),
+            vec![50, T_STATES_PER_FRAME as u32 + 50]
+        );
+
+        ula.end_frame();
+        assert_eq!(edge_ticks(&ula), vec![50]);
+        assert_eq!(
+            ula.audio().frame().1,
+            Levels { speaker: false, mic: false }
+        );
+
+        ula.end_frame();
+        assert_eq!(edge_ticks(&ula), Vec::<u32>::new());
+        assert_eq!(
+            ula.audio().frame().1,
+            Levels { speaker: true, mic: false }
+        );
     }
 
     #[test]

@@ -1,0 +1,17 @@
+[package]
+name = "rkw-audio"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "The beeper: speaker edges on the Z80 clock, resampled and shaped into host audio"
+
+# Nothing. This crate exists as a crate rather than a module of rkw-spectrum
+# precisely so that it cannot reach the machine, and a dependency on anything
+# would be the first step back (ADR-0017, ADR-0021). The clock rate and the
+# frame length arrive as parameters, not as imports.
+[dependencies]
+
+[lints]
+workspace = true

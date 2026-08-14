@@ -5,16 +5,25 @@
 //! and an accepted interrupt all happen on that thread — the first of them
 //! thousands of times a second in software that stripes the border.
 //!
+//! The beeper is measured separately, and has to be. It runs on the emulation
+//! thread once a frame — an edge into a fixed log on every `OUT`, and a
+//! frame's worth of resampling and filtering inside `service_event` — but none
+//! of it is reached by the plain `Emu<Spectrum>` case below, because that
+//! machine has no beeper in it. A test that only covered the plain case would
+//! leave every line of the new per-frame work outside the assertion that
+//! exists to protect it.
+//!
 //! Rendering is measured too, but for a different reason. It is not on the
 //! emulation thread at all; it is on whatever thread asked for a picture, at
 //! most fifty times a second. What must not happen is for it to allocate 104 KB
 //! per frame when handed a buffer to reuse.
 
+use rkw_audio::ring;
 use rkw_debug::Debugger;
 use rkw_debug::command::Command;
 use rkw_debug::emu::{Config, Emu, RunState};
 use rkw_spectrum::keymap::{HostKey, HostKeys, KeyMap};
-use rkw_spectrum::{Flash, Framebuffer, SCREEN_BASE, Spectrum};
+use rkw_spectrum::{AudioMachine, Flash, Framebuffer, SCREEN_BASE, Spectrum};
 use z80::Cpu;
 
 #[global_allocator]
@@ -101,6 +110,66 @@ fn the_slice_loop_running_a_spectrum_does_not_allocate() {
         "the border never changed, so the log was never exercised"
     );
     assert!(emu.cpu.regs.i == 0 && emu.cpu.regs.iff1);
+}
+
+#[test]
+fn the_slice_loop_making_sound_does_not_allocate() {
+    // STRIPES writes port $FE every forty T-states with an incrementing
+    // accumulator, so bit 4 moves every sixteenth pass — about a hundred and
+    // ten edges a frame, which is a real beeper load and comfortably inside
+    // the log. Whether it fits is not the point; whether recording it, and
+    // resampling it, and filtering it, and pushing it into the ring, touch the
+    // heap is.
+    let (cpu, spectrum) = machine();
+    let (tx, rx) = ring::channel(1 << 16);
+    let machine = AudioMachine::with_defaults(spectrum, 48_000, tx);
+
+    let (_, allocations) = alloc_check::count(Framebuffer::new);
+    assert!(
+        allocations > 0,
+        "allocating a framebuffer allocated nothing, so the counting allocator \
+         is not installed and this test proves nothing"
+    );
+
+    let (mut emu, mut handle) = Emu::new(
+        cpu,
+        machine,
+        Debugger::new(),
+        Config {
+            event_capacity: 16,
+            command_capacity: 16,
+            control_interval: 224,
+            log_capacity: 0,
+        },
+    );
+    handle.send(Command::Resume).unwrap();
+
+    // Six frames and a bit, at one slice per scanline.
+    const SLICES: usize = 2_000;
+    let (_, allocations) = alloc_check::count(|| {
+        for _ in 0..SLICES {
+            assert_eq!(emu.slice(), RunState::Running);
+        }
+    });
+    assert_eq!(
+        allocations, 0,
+        "{SLICES} slices with the beeper running allocated {allocations} times"
+    );
+
+    // The run did what it was supposed to: frames ended, edges were recorded
+    // and turned into sound, and nothing was lost at either end.
+    assert!(emu.machine.spectrum.ula.frames() >= 6);
+    assert!(
+        rx.len() > 5_000,
+        "six frames should be five thousand samples, not {}",
+        rx.len()
+    );
+    assert_eq!(emu.machine.edges_dropped(), 0, "the edge log overflowed");
+    assert_eq!(emu.machine.dropped(), 0, "the sample ring overflowed");
+    assert!(
+        emu.machine.fill() > 0.0,
+        "nothing reached the ring, so the beeper was never exercised"
+    );
 }
 
 /// Key events arrive on whatever thread the frontend runs on and are applied

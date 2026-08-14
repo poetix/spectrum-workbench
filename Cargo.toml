@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/alloc-check",
     "crates/rkw-asm",
+    "crates/rkw-audio",
     "crates/rkw-cli",
     "crates/rkw-dbginfo",
     "crates/rkw-debug",

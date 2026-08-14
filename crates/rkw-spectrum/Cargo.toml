@@ -8,6 +8,10 @@ repository.workspace = true
 description = "The 48K Spectrum: memory map, ULA, screen and frame timing"
 
 [dependencies]
+# The speaker's edge log, and everything that turns it into sound. The
+# dependency points this way because the machine is what makes the edges and
+# the audio crate is what must never learn a sample rate from it (ADR-0021).
+rkw-audio = { path = "../rkw-audio" }
 # The `Machine` trait the emulation thread runs against (ADR-0007). The
 # dependency points this way because the ULA is what implements the schedule
 # the slice loop asks about, and the debugger cannot be made to know about
