@@ -31,6 +31,7 @@ dependencies = [
  "rkw-asm",
  "rkw-dbginfo",
  "rkw-debug",
+ "rkw-spectrum",
  "z80",
 ]
 

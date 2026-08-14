@@ -11,6 +11,12 @@ ROM with tape loading and saving, screen output and sound.
 the assembler is finished: it turns source into Z80 machine code that runs on
 it, with macros, conditional assembly, a listing and debug information. The
 debugger works — breakpoints, watchpoints, stepping, source-level breakpoints
+and listings, and a gdb-style REPL that assembles a file and runs it. The
+hardware is the 48K memory map, the screen, the frame interrupt and the keyboard
+matrix, which between them are enough that **the real 48K ROM boots to a BASIC
+prompt and a program can be typed in and run**. There is no sound and no tape
+yet, and no window: the picture comes out as a framebuffer, and the only front
+end is the debugger.
 and listings, and a gdb-style REPL that assembles a file and runs it. The first
 hardware is there: the 48K memory map, the screen, the frame interrupt, the
 keyboard matrix and the beeper. There is no tape yet, nothing opens an audio
@@ -178,6 +184,25 @@ free-running one does.
 Contention is not here — that is ticket 0020, and ADR-0002 means it is a change
 to the `Bus` implementation and to nothing else.
 
+### Booting the ROM
+
+The parts above add up to a machine the real ROM runs on: it clears the RAM,
+sets its system variables, prints the copyright line and takes keystrokes off
+the matrix, and a BASIC program can be typed in and run. That is the test the
+rest of the crate is for — sixteen kilobytes of 1982 machine code written
+against the hardware and nothing else, which is not fooled by an API that
+agrees with itself.
+
+The ROM is Amstrad's and is not in this repository. `scripts/fetch-rom.sh`
+installs one, or `$RKW_48K_ROM` points at one you already have; the tests that
+need it skip with a message when it is absent.
+
+The boot test reads the screen back *as text*, by matching each character cell
+against the ROM's own font, so it asserts on `© 1982 Sinclair Research Ltd` and
+on `10>PRINT "hello"` rather than on forty thousand pixels. What that cannot
+see — the pixels within a cell, the attributes, the border — is covered by a
+pinned hash of the framebuffer. Nothing in the machine is seeded by the host, so
+the boot is deterministic down to the T-state.
 ### The beeper
 
 The speaker is one bit of the same port, and it is entirely a matter of timing:
@@ -271,6 +296,29 @@ A source file assembled by `rkwdbg` brings its own debug information, from the
 same text it assembled. A binary brings whatever `FILE.rkwdbg` sits beside it,
 or whatever `--debug` names.
 
+`--rom` swaps the bare 64K for a Spectrum, so the ROM can be debugged like
+anything else — and so a binary loaded beside it runs with the ROM present,
+which is what a test suite that calls ROM routines needs.
+
+```sh
+rkwdbg --rom 48.rom
+```
+
+```text
+Loaded 16384 bytes at $0000 from 48.rom
+Entry point $0000. `help` lists the commands.
+(rkw) break $028E
+Breakpoint 1 at $028E
+(rkw) continue
+Breakpoint 1 at $028E
+=> 028E  2E 2F        LD L,$2F
+   T=5730969 after 641042 instructions
+```
+
+`$028E` is `KEY-SCAN`, which nothing reaches until the frame interrupt is being
+taken — so stopping there is the interrupt, the ROM's handler and the keyboard
+matrix all reporting for duty at once.
+
 ## Layout
 
 ```text
@@ -291,8 +339,11 @@ tickets/
   closed/
 scripts/
   fetch-testdata.sh
+  fetch-rom.sh
 ```
 
+Planned: `rkw-dap` (Debug Adapter Protocol front end), `rkw-gui`. Tape and sound
+join `rkw-spectrum`.
 Planned: `rkw-dap` (Debug Adapter Protocol front end), `rkw-gui`. Tape joins
 `rkw-spectrum`.
 
@@ -356,6 +407,26 @@ The exercisers run for billions of T-states — around 40 seconds each in a
 release build — so they are marked `#[ignore]`. The tests that need this data
 skip with a message when it is absent, so `cargo test` works on a fresh clone.
 
+## The ROM
+
+The 48K ROM is not vendored either. Fetch one:
+
+```sh
+scripts/fetch-rom.sh
+```
+
+Then:
+
+```sh
+cargo test -p rkw-spectrum --test boot
+cargo run -p rkw-cli -- --rom crates/rkw-spectrum/tests/fixtures/48.rom
+```
+
+The script verifies the image against the SHA-256 of the 1982 ROM, because a
+128K ROM pair or a Spanish 48K image would load and boot to something subtly
+different. A ROM already on the machine works too: `$RKW_48K_ROM` overrides the
+fixture path.
+
 ## Licence
 
 Dual-licensed under either of
@@ -376,3 +447,8 @@ above and is not distributed with this repository:
 
 - the Fuse Z80 test suite, from the Fuse emulator (GPL-2.0-or-later)
 - `zexdoc` and `zexall`, Frank Cringle's instruction exerciser (GPL-2.0)
+
+`scripts/fetch-rom.sh` downloads the 48K ZX Spectrum ROM, which is Amstrad's
+copyright and likewise not distributed here. It is a test input: nothing in this
+repository links against it or contains any part of it, and every test that uses
+it skips when it is absent.
