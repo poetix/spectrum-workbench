@@ -12,6 +12,8 @@ name = "rkwdbg"
 path = "src/main.rs"
 
 [dependencies]
+# For --rom, which swaps the bare 64K for a machine with a ULA in it.
+rkw-spectrum = { path = "../rkw-spectrum" }
 rkw-asm = { path = "../rkw-asm" }
 rkw-dbginfo = { path = "../rkw-dbginfo" }
 rkw-debug = { path = "../rkw-debug" }

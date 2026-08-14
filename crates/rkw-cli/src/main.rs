@@ -9,9 +9,10 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use rkw_cli::Shell;
-use rkw_cli::load::{self, LoadError, Program};
+use rkw_cli::load::{self, Image, LoadError, Program};
 use rkw_debug::cmd::Session;
 use rkw_debug::emu::Config;
+use rkw_debug::machine::Machine;
 use z80::{Cpu, FlatMemory};
 
 const USAGE: &str = "\
@@ -20,6 +21,7 @@ rkwdbg — a gdb-style debugger for the Z80 core
 usage: rkwdbg [options] [FILE.asm]
 
   FILE.asm            assemble and load a source file
+  --rom FILE          boot a 48K Spectrum with this ROM at $0000
   --load ADDR=FILE    load raw bytes at an address (repeatable)
   --debug FILE        read a .rkwdbg sidecar, for a binary assembled elsewhere
   --pc ADDR           where to start; defaults to the lowest address loaded
@@ -33,7 +35,12 @@ Addresses are $hex, 0xhex, %binary or decimal. Where there is debug
 information, --pc also takes a label.
 
 A source file assembled here brings its own debug information. A binary brings
-whatever `FILE.rkwdbg` sits beside it, unless --debug says otherwise.";
+whatever `FILE.rkwdbg` sits beside it, unless --debug says otherwise.
+
+Without --rom the machine is a flat 64K with no hardware in it, which is what
+a routine under test wants. With one it is a Spectrum: ROM that ignores writes,
+a 50 Hz interrupt, a ULA and a keyboard — so `--rom 48.rom` and `continue` boots
+to the BASIC prompt, and a breakpoint in the ROM stops in the ROM.";
 
 /// Somewhere well clear of a 48K screen and its system variables, and where
 /// the debugger's own tests put it.
@@ -41,6 +48,7 @@ const DEFAULT_SP: u16 = 0xFF00;
 
 struct Options {
     source: Option<PathBuf>,
+    rom: Option<PathBuf>,
     binaries: Vec<(u16, PathBuf)>,
     scripts: Vec<PathBuf>,
     debug: Option<PathBuf>,
@@ -91,6 +99,7 @@ fn sources_of(
 fn parse_args() -> Result<Option<Options>, String> {
     let mut options = Options {
         source: None,
+        rom: None,
         binaries: Vec::new(),
         scripts: Vec::new(),
         debug: None,
@@ -115,6 +124,7 @@ fn parse_args() -> Result<Option<Options>, String> {
                 let addr = load::number(addr).ok_or(format!("{addr} is not an address"))?;
                 options.binaries.push((addr, PathBuf::from(path)));
             }
+            "--rom" => options.rom = Some(PathBuf::from(value("--rom")?)),
             "-x" | "--script" => options.scripts.push(PathBuf::from(value("--script")?)),
             "--debug" => options.debug = Some(PathBuf::from(value("--debug")?)),
             "--pc" => options.pc = Some(value("--pc")?),
@@ -138,9 +148,38 @@ fn parse_args() -> Result<Option<Options>, String> {
     Ok(Some(options))
 }
 
+/// Build the machine the options asked for, and run on it.
+///
+/// The two arms are the same session over two different [`Machine`]s, which is
+/// the whole of what `--rom` changes: everything downstream of here is generic,
+/// and the debugger has never known what it is debugging.
 fn run(options: Options) -> Result<ExitCode, LoadError> {
-    let mut mem = FlatMemory::new();
+    match &options.rom {
+        Some(path) => {
+            let (machine, loaded) = load::rom_file(path)?;
+            run_on(options, machine, Some(loaded))
+        }
+        None => run_on(options, FlatMemory::new(), None),
+    }
+}
+
+fn run_on<M: Machine + Image>(
+    options: Options,
+    mut mem: M,
+    rom: Option<rkw_cli::Loaded>,
+) -> Result<ExitCode, LoadError> {
     let mut programs: Vec<Program> = Vec::new();
+    if let Some(loaded) = rom {
+        programs.push(Program {
+            loaded: vec![loaded],
+            // A machine with a ROM starts at the reset vector, not at the
+            // bottom of whatever else was loaded — but only if nothing else
+            // was, because `--rom rom --load $8000=test.bin` means "run the
+            // test with the ROM present" and its entry point is the test's.
+            entry: None,
+            ..Program::default()
+        });
+    }
     if let Some(path) = &options.source {
         programs.push(load::assemble_file(&mut mem, path)?);
     }

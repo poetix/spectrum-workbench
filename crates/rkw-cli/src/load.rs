@@ -16,9 +16,34 @@ use std::path::Path;
 
 use rkw_asm::{SourceMap, assemble, debug_info};
 use rkw_dbginfo::{DebugInfo, Sources};
+use rkw_spectrum::Spectrum;
 use z80::FlatMemory;
 
 use crate::Loaded;
+
+/// Somewhere a loader can put bytes.
+///
+/// Deliberately not [`Bus::write`](z80::Bus::write): loading is something done
+/// *to* a machine rather than *by* it, and on a machine with a ROM in it a bus
+/// write below `0x4000` does nothing at all — which is right for the emulated
+/// program and useless for a loader. This is the poke half of that distinction
+/// (see `rkw_spectrum::memory`), and it is what lets one set of loaders fill
+/// either machine the CLI can build.
+pub trait Image {
+    fn load(&mut self, addr: u16, bytes: &[u8]);
+}
+
+impl Image for FlatMemory {
+    fn load(&mut self, addr: u16, bytes: &[u8]) {
+        FlatMemory::load(self, addr, bytes);
+    }
+}
+
+impl Image for Spectrum {
+    fn load(&mut self, addr: u16, bytes: &[u8]) {
+        self.memory.load(addr, bytes);
+    }
+}
 
 /// What was put into memory, and where execution should start.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -43,6 +68,11 @@ pub enum LoadError {
         path: String,
         message: String,
     },
+    /// A ROM image that is not one.
+    Rom {
+        path: String,
+        message: String,
+    },
 }
 
 impl fmt::Display for LoadError {
@@ -50,7 +80,9 @@ impl fmt::Display for LoadError {
         match self {
             LoadError::Io(e) => write!(f, "{e}"),
             LoadError::Assembly(text) => write!(f, "{}", text.trim_end()),
-            LoadError::DebugInfo { path, message } => write!(f, "{path}: {message}"),
+            LoadError::DebugInfo { path, message } | LoadError::Rom { path, message } => {
+                write!(f, "{path}: {message}")
+            }
         }
     }
 }
@@ -64,7 +96,7 @@ impl From<std::io::Error> for LoadError {
 }
 
 /// Assemble a source file and load every segment it produced.
-pub fn assemble_file(mem: &mut FlatMemory, path: &Path) -> Result<Program, LoadError> {
+pub fn assemble_file<M: Image>(mem: &mut M, path: &Path) -> Result<Program, LoadError> {
     let mut map = SourceMap::new();
     let file = map.load(path)?;
     let mut assembled = assemble(&mut map, file);
@@ -124,9 +156,30 @@ pub fn sidecar_of(path: &Path) -> std::path::PathBuf {
     path.with_extension("rkwdbg")
 }
 
+/// A machine with a ROM in it, and the banner line that says so.
+///
+/// Refused rather than truncated when the image is too big, because a 32K file
+/// is a 128K ROM pair and half of one boots to something that looks almost
+/// right.
+pub fn rom_file(path: &Path) -> Result<(Spectrum, Loaded), LoadError> {
+    let bytes = std::fs::read(path)?;
+    let machine = Spectrum::with_rom(&bytes).map_err(|e| LoadError::Rom {
+        path: path.display().to_string(),
+        message: e.to_string(),
+    })?;
+    Ok((
+        machine,
+        Loaded {
+            path: path.to_path_buf(),
+            origin: 0x0000,
+            len: bytes.len(),
+        },
+    ))
+}
+
 /// Load raw bytes at an address, as a tape-less way of running something that
 /// has already been assembled.
-pub fn binary_file(mem: &mut FlatMemory, path: &Path, origin: u16) -> Result<Program, LoadError> {
+pub fn binary_file<M: Image>(mem: &mut M, path: &Path, origin: u16) -> Result<Program, LoadError> {
     let bytes = std::fs::read(path)?;
     mem.load(origin, &bytes);
     Ok(Program {
