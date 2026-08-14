@@ -1,10 +1,12 @@
 //! The tape deck: a mounted image, where the tape has got to, and the `EAR`
 //! line it drives.
 //!
-//! This is the whole of the machine's part in loading, and it is small: a
-//! [`Player`] from [`rkw_tape`], the T-state the pulse in progress ends at,
-//! and the level it put on the line. Everything about what a pulse *is* lives
-//! in the tape crate, which has never heard of a Spectrum.
+//! This is the whole of the machine's part in loading, and it is small: an
+//! [`Image`] and a [`Player`] from [`rkw_tape`], the T-state the pulse in
+//! progress ends at, and the level it put on the line. Everything about what a
+//! pulse *is* lives in the tape crate, which has never heard of a Spectrum —
+//! including which file format it came out of, since a TAP and a TZX are two
+//! things to play and one way of playing them.
 //!
 //! # Why the tape is machine state when the beeper is not
 //!
@@ -17,10 +19,10 @@
 //! ring, and regenerating them means holding the position they are generated
 //! from.
 //!
-//! The image itself is an [`Arc`], so cloning a machine into a checkpoint
-//! costs a pointer rather than a copy of the tape. It is immutable and it is
-//! named by content ([`Tap::hash`]), which is what ADR-0017 asks a recorded
-//! session to record about it.
+//! The image itself is a reference count, so cloning a machine into a
+//! checkpoint costs a pointer rather than a copy of the tape. It is immutable
+//! and it is named by content ([`Image::hash`]), which is what ADR-0017 asks a
+//! recorded session to record about it.
 //!
 //! # Edges arrive as scheduled events, not as commands
 //!
@@ -46,9 +48,7 @@
 //! be run by playing the tape at them — which is why the waveform came first
 //! and this is a convenience on top of it.
 
-use std::sync::Arc;
-
-use rkw_tape::{Player, Tap, Timing};
+use rkw_tape::{Image, Player, Timing};
 use z80::Cpu;
 use z80::flag;
 
@@ -62,7 +62,7 @@ pub const LD_BYTES: u16 = 0x0556;
 /// A tape, and where the head is on it.
 #[derive(Clone, Debug)]
 pub struct Tape {
-    image: Option<Arc<Tap>>,
+    image: Option<Image>,
     timing: Timing,
     player: Player,
     /// The T-state at which the pulse in progress ends and the next one
@@ -93,9 +93,10 @@ impl Tape {
         }
     }
 
-    /// Put a tape in, rewound and stopped.
-    pub fn mount(&mut self, tap: Arc<Tap>) {
-        self.image = Some(tap);
+    /// Put a tape in, rewound and stopped. A TAP or a TZX: what the deck plays
+    /// is pulses, and both formats produce them.
+    pub fn mount(&mut self, image: impl Into<Image>) {
+        self.image = Some(image.into());
         self.player = Player::new();
         self.playing = false;
         self.level = true;
@@ -109,7 +110,7 @@ impl Tape {
     }
 
     /// What is mounted.
-    pub fn image(&self) -> Option<&Arc<Tap>> {
+    pub fn image(&self) -> Option<&Image> {
         self.image.as_ref()
     }
 
@@ -126,7 +127,12 @@ impl Tape {
 
     /// Start the tape at T-state `t`, which is where the first pulse begins.
     /// A deck with nothing in it stays stopped.
+    ///
+    /// A tape stopped by a block that asked for it — a TZX telling the person
+    /// listening to turn the cassette over — carries on from the block after
+    /// it, which is what pressing play on a real one does.
     pub fn play(&mut self, t: u64) {
+        self.player.resume();
         if self.image.is_some() && !self.player.finished() {
             self.playing = true;
             self.next_edge = t;
@@ -162,12 +168,19 @@ impl Tape {
 
     /// Blocks on the mounted tape.
     pub fn blocks(&self) -> usize {
-        self.image.as_ref().map_or(0, |tap| tap.len())
+        self.image.as_ref().map_or(0, |image| image.len())
     }
 
     /// True once the tape has played out.
     pub fn finished(&self) -> bool {
         self.player.finished()
+    }
+
+    /// True when the tape stopped itself rather than running out: a TZX block
+    /// asked for it, and playing again picks up at the block after. A front
+    /// end wants to tell the two apart, because one of them is a prompt.
+    pub fn stopped_by_tape(&self) -> bool {
+        self.player.stopped()
     }
 
     /// The level on `EAR`.
@@ -246,14 +259,18 @@ pub enum Loaded {
 /// the border in stripes for as long as it takes; this returns in the same
 /// T-state it was called in, which is the point of it.
 pub fn ld_bytes(cpu: &mut Cpu, machine: &mut Spectrum) -> Loaded {
-    let block = machine.tape.block();
-    // The image is taken by `Arc` rather than by reference, and rather than
+    // The image is taken by handle rather than by reference, and rather than
     // copied: the block has to be readable while the machine is being written
-    // to, and a pointer is the cheap way to hold it there.
+    // to, and a reference count is the cheap way to hold it there.
     let Some(image) = machine.tape.image().cloned() else {
         return Loaded::NoTape;
     };
-    let Some(body) = image.block(block).map(|b| b.body()) else {
+    // A TZX interleaves its data with text, group markers and control blocks,
+    // none of which a loader can see: what a real tape does with them is play
+    // them past, so the head moves to the next block there are bytes in.
+    let Some((block, body)) = (machine.tape.block()..image.len())
+        .find_map(|index| image.data_block(index).map(|body| (index, body)))
+    else {
         return Loaded::NoTape;
     };
     // The head moves on whether or not this block was wanted, which is what
@@ -318,10 +335,11 @@ fn ret(cpu: &mut Cpu, machine: &mut Spectrum) {
 mod tests {
     use super::*;
     use rkw_tape::tap::DATA_FLAG;
+    use rkw_tape::{Tap, Tzx};
 
-    fn tape_of(tap: Tap) -> Tape {
+    fn tape_of(image: impl Into<Image>) -> Tape {
         let mut tape = Tape::new();
-        tape.mount(Arc::new(tap));
+        tape.mount(image);
         tape
     }
 
@@ -383,6 +401,31 @@ mod tests {
         assert!(tape.finished());
         assert!(level, "the line goes back to idle when the tape runs out");
         assert_eq!(tape.next_edge(), None);
+    }
+
+    #[test]
+    fn a_tzx_that_stops_the_tape_stops_the_deck_and_starting_it_again_carries_on() {
+        // The block a game puts between its two levels, or a tape between its
+        // two sides: it is not the end of the tape, and the deck has to be
+        // able to tell the difference or the second half never plays.
+        let tzx = Tzx::builder().tone(1000, 1).pause(0).tone(2000, 1).build();
+        let mut tape = tape_of(tzx);
+        tape.play(0);
+
+        tape.advance_to(1000);
+        assert!(!tape.is_playing());
+        assert!(tape.stopped_by_tape());
+        assert!(!tape.finished());
+        assert_eq!(tape.block(), 2);
+
+        tape.play(5000);
+        assert!(tape.is_playing());
+        assert!(!tape.stopped_by_tape());
+        assert_eq!(tape.next_edge(), Some(5000));
+        tape.advance_to(5000);
+        assert_eq!(tape.next_edge(), Some(7000), "the second tone, 2000 long");
+        tape.advance_to(7000);
+        assert!(tape.finished(), "and then the tape has run out");
     }
 
     #[test]

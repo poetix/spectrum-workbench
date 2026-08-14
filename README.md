@@ -15,9 +15,9 @@ and listings, and a gdb-style REPL that assembles a file and runs it. The
 hardware is the 48K memory map, the screen, the frame interrupt, the keyboard
 matrix, the beeper and the tape, which between them are enough that **the real
 48K ROM boots to a BASIC prompt, a program can be typed in and run, and
-`LOAD ""` reads a tape image off the waveform**. There is no window and nothing
-opens an audio device: the picture comes out as a framebuffer, the sound comes
-out as a sample ring, and the only front end is the debugger.
+`LOAD ""` reads a `.tap` or a `.tzx` off the waveform**. There is no window and
+nothing opens an audio device: the picture comes out as a framebuffer, the sound
+comes out as a sample ring, and the only front end is the debugger.
 
 ## What works
 
@@ -248,13 +248,28 @@ reads them once a frame and decodes them back into blocks. A block that lost
 bytes is discarded and counted rather than written out short, because a
 truncated block in a TAP file is a tape that looks fine until it is loaded.
 
+`.tzx` files play through the same machinery, because the difference between
+the two formats is what a block *says* and not what a deck does with it. A TAP
+block is bytes with the ROM's timings assumed; a TZX block carries its own —
+turbo blocks with their pulse lengths spelled out, bare pilot tones and pulse
+sequences for a loader that builds its own block header, pure data with no
+pilot at all, and a direct recording of the line for a tape no encoding
+describes. Around those are the blocks that are not waveform: pauses, jumps,
+loops, a stop that waits for the person listening, and the text and archive
+information a file carries about itself. A block type this player has never
+heard of is skipped by the four-byte length the format puts after an unknown
+id, so a file from a later version of it still loads.
+
 The ROM checks all of it. With a ROM image present the tests call the real
 `LD-BYTES` at a played tape, type `LOAD ""` at the BASIC prompt, and record
-what `SA-BYTES` writes — then mount that and load it back.
+what `SA-BYTES` writes — then mount that and load it back. The TZX tests are
+the same idea from the other end: a block assembled out of a tone, a pulse pair
+and a pure data block loads, and so does one sampled at 70 T-states and put
+back as a direct recording.
 
 ```rust
-let tap = Tap::parse(&std::fs::read("game.tap")?)?;
-machine.mount_tape(Arc::new(tap));
+machine.mount_tape(Tap::parse(&std::fs::read("game.tap")?)?);
+machine.mount_tape(Tzx::parse(&std::fs::read("game.tzx")?)?);
 machine.play_tape();
 ```
 
@@ -363,7 +378,7 @@ crates/
   rkw-dbginfo/    the debug info format, and source resolution over it
   rkw-debug/      debugger core, emulation thread, command layer
   rkw-spectrum/   the 48K machine: memory map, ULA, screen, sound, tape deck
-  rkw-tape/       TAP blocks, the waveform they stand for, and the way back
+  rkw-tape/       TAP and TZX, the waveform they stand for, and the way back
   z80/            CPU core and disassembler
 adr/              architecture decision records
 docs/

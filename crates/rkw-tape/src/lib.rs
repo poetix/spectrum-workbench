@@ -11,19 +11,27 @@
 //!
 //! That is why [`pulse`] is the middle of the crate rather than a detail of
 //! [`tap`]: the waveform is what the machine consumes, and the ROM's own
-//! timings are one [`Timing`] among the several ticket 0017's TZX will need.
+//! timings are one [`Timing`] among the several a [`Tzx`] carries.
 //!
 //! # How it is laid out
 //!
-//! - [`tap`] is the container: length-prefixed blocks, each a flag byte, some
-//!   data and an XOR checksum. Parsing is validation only — a `Tap` holds the
-//!   file bytes it was given and an index of where its blocks are.
-//! - [`pulse`] turns a `Tap` into pulses: pilot, sync, two pulses a bit, a
+//! - [`tap`] is the simpler container: length-prefixed blocks, each a flag
+//!   byte, some data and an XOR checksum. Parsing is validation only — a `Tap`
+//!   holds the file bytes it was given and an index of where its blocks are.
+//! - [`tzx`] is the other one: the same blocks with their timings written
+//!   down, plus the ones no ROM ever wrote — turbo blocks, bare pulse
+//!   sequences, recordings of the line — and control flow over them.
+//! - [`pulse`] turns either into pulses: pilot, sync, two pulses a bit, a
 //!   pause, the next block. [`Player`] is the state machine that walks it, and
 //!   it is plain `Copy` data with the image passed in, because it lives inside
-//!   an emulated machine that gets cloned into checkpoints (ADR-0017).
+//!   an emulated machine that gets cloned into checkpoints (ADR-0017). It asks
+//!   the image for a [`Plan`] per block, which is the only thing the two
+//!   formats have to agree about.
+//! - [`image`] is the pair of them behind an [`std::sync::Arc`], which is what
+//!   a deck mounts.
 //! - [`save`] is the same thing backwards: edges in, blocks out, for the `MIC`
-//!   bit that a saving program drives.
+//!   bit that a saving program drives. It writes TAP, because what the ROM
+//!   saves is what a TAP file can hold.
 //!
 //! # Nothing here knows what a Spectrum is
 //!
@@ -44,10 +52,14 @@
 //! assert_eq!(player.next_pulse(&tap, &timing).map(|p| p.ticks), Some(2168));
 //! ```
 
+pub mod image;
 pub mod pulse;
 pub mod save;
 pub mod tap;
+pub mod tzx;
 
-pub use pulse::{Player, Pulse, Timing};
+pub use image::Image;
+pub use pulse::{Data, Direct, Plan, Playable, Player, Pulse, Timing};
 pub use save::Recorder;
 pub use tap::{Block, Tap, TapError, checksum};
+pub use tzx::{Tzx, TzxBlock, TzxError};

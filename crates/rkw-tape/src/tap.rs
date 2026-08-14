@@ -31,6 +31,8 @@
 //! on it is a tape, the ROM's response to one is the thing under test, and a
 //! parser that refused to open it would make that untestable.
 
+use crate::pulse::{Data, Plan, Playable, Timing};
+
 /// The flag byte in front of a header block. The ROM treats any flag under
 /// `0x80` as a header, and nothing has ever written a different one.
 pub const HEADER_FLAG: u8 = 0x00;
@@ -146,13 +148,47 @@ impl Tap {
     /// one: what it has to catch is a file that changed, not a file somebody
     /// arranged to collide.
     pub fn hash(&self) -> u64 {
-        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-        for &byte in &self.bytes {
-            h ^= u64::from(byte);
-            h = h.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-        h
+        fnv1a(&self.bytes)
     }
+
+    /// What block `index` plays: pilot, sync, its bytes, a tail and a pause,
+    /// all at the ROM's timings, because a TAP file records no others.
+    ///
+    /// This is the whole of what a TAP file can say, and it is one of the
+    /// several things [`crate::Tzx`] can — which is why the player takes a
+    /// [`Plan`] rather than a `Tap`.
+    pub fn plan(&self, index: usize, timing: &Timing) -> Option<Plan<'_>> {
+        let block = self.block(index)?;
+        Some(Plan::Data(Data {
+            pilot: timing.pilot,
+            pilot_pulses: timing.pilot_pulses(block.is_header()),
+            sync_first: timing.sync_first,
+            sync_second: timing.sync_second,
+            zero: timing.zero,
+            one: timing.one,
+            last_bits: 8,
+            tail: timing.tail,
+            pause: timing.pause,
+            bytes: block.body(),
+        }))
+    }
+}
+
+impl Playable for Tap {
+    fn plan(&self, index: usize, timing: &Timing) -> Option<Plan<'_>> {
+        Tap::plan(self, index, timing)
+    }
+}
+
+/// FNV-1a, which is how both tape formats name themselves by content: see
+/// [`Tap::hash`], and [`crate::Tzx::hash`] for the same over the other one.
+pub(crate) fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &byte in bytes {
+        h ^= u64::from(byte);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
 }
 
 impl std::fmt::Debug for Tap {

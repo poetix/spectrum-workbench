@@ -15,10 +15,8 @@
 //! **The floating bus.** A read of an unattached port returns `0xFF` rather
 //! than the byte the ULA happens to be fetching, which is the same ticket.
 
-use std::sync::Arc;
-
 use rkw_debug::machine::{Clock, Machine};
-use rkw_tape::Tap;
+use rkw_tape::Image;
 use z80::Bus;
 use z80::disasm::Peek;
 
@@ -70,9 +68,10 @@ impl Spectrum {
         self.t
     }
 
-    /// Put a tape in the deck, rewound and stopped.
-    pub fn mount_tape(&mut self, tap: Arc<Tap>) {
-        self.tape.mount(tap);
+    /// Put a tape in the deck, rewound and stopped: a [`rkw_tape::Tap`], a
+    /// [`rkw_tape::Tzx`], or either of them behind an `Arc` already.
+    pub fn mount_tape(&mut self, image: impl Into<Image>) {
+        self.tape.mount(image);
     }
 
     /// Start the tape from where the head is. The first pulse begins now, so a
