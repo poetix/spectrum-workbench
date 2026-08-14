@@ -277,8 +277,31 @@ impl<M: Machine> Emu<M> {
         (emu, handle)
     }
 
-    /// Slices until something says `Exited`. This is the thread body.
+    /// Slices until something says `Exited`. This is the thread body, and it
+    /// runs the machine as fast as the host can.
     pub fn run(&mut self) {
+        self.run_paced(|_| None);
+    }
+
+    /// The same loop, with something to say how fast it should go.
+    ///
+    /// The core runs at about 360× real time, so a machine left to itself
+    /// arrives at the end of a second of emulated sound in three milliseconds
+    /// and throws the rest away. Something has to hold it back, and what that
+    /// something is is a policy: a headless run wants none, a frontend paces
+    /// on how far ahead of the speaker it has got (ticket 0019), and a test
+    /// wants neither.
+    ///
+    /// So `pace` is asked, after each slice that left the machine running, how
+    /// long to wait before the next one — `None` to carry straight on. It is
+    /// handed the whole [`Emu`], because what a pacer wants to look at is the
+    /// machine's own idea of how far ahead it is and not a clock.
+    ///
+    /// The wait is a [`park_timeout`](std::thread::park_timeout) rather than a
+    /// sleep, so a command that arrives during it wakes the thread rather than
+    /// waiting out the remainder: a keypress must not be held up by a frame's
+    /// worth of pacing.
+    pub fn run_paced<P: FnMut(&Emu<M>) -> Option<Duration>>(&mut self, mut pace: P) {
         loop {
             match self.slice() {
                 RunState::Exited => return,
@@ -286,7 +309,11 @@ impl<M: Machine> Emu<M> {
                 // unparks after pushing one. A spurious wake just runs an
                 // empty drain.
                 RunState::Paused => std::thread::park(),
-                RunState::Running => {}
+                RunState::Running => {
+                    if let Some(wait) = pace(self) {
+                        std::thread::park_timeout(wait);
+                    }
+                }
             }
         }
     }
@@ -440,6 +467,7 @@ impl<M: Machine> Emu<M> {
             // The raw accessor, not a machine cycle: a poke is the debugger
             // writing, and nothing in the machine should be able to tell.
             Command::Poke { addr, value } => self.machine.write(addr, value),
+            Command::Keys(matrix) => self.machine.set_keys(matrix),
             Command::Reset => self.cpu.reset(),
             Command::SetPc(addr) => self.cpu.regs.pc = addr,
             Command::Quit => self.shared.set_stop(StopReason::Paused, RunState::Exited),
@@ -558,11 +586,31 @@ pub fn spawn<M: Machine + Send + 'static>(
     debugger: Debugger,
     config: Config,
 ) -> (Handle, JoinHandle<Emu<M>>) {
+    spawn_paced(cpu, machine, debugger, config, |_| None)
+}
+
+/// The same, with a pacer: see [`Emu::run_paced`].
+///
+/// A frontend could run the slice loop on a thread of its own instead — it is
+/// a public method on a public struct — but the [`Handle`] would have no
+/// thread to unpark and every command would then wait for the machine to
+/// notice it by itself.
+pub fn spawn_paced<M, P>(
+    cpu: Cpu,
+    machine: M,
+    debugger: Debugger,
+    config: Config,
+    pace: P,
+) -> (Handle, JoinHandle<Emu<M>>)
+where
+    M: Machine + Send + 'static,
+    P: FnMut(&Emu<M>) -> Option<Duration> + Send + 'static,
+{
     let (mut emu, mut handle) = Emu::new(cpu, machine, debugger, config);
     let join = std::thread::Builder::new()
         .name("emulation".into())
         .spawn(move || {
-            emu.run();
+            emu.run_paced(pace);
             emu
         })
         .expect("spawning the emulation thread");

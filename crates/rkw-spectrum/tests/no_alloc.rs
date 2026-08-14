@@ -13,10 +13,13 @@
 //! leave every line of the new per-frame work outside the assertion that
 //! exists to protect it.
 //!
-//! Rendering is measured too, but for a different reason. It is not on the
-//! emulation thread at all; it is on whatever thread asked for a picture, at
-//! most fifty times a second. What must not happen is for it to allocate 104 KB
-//! per frame when handed a buffer to reuse.
+//! Rendering is measured too, and twice. Pulled — a debugger asking for a
+//! picture — it is not on the emulation thread at all, and what must not
+//! happen is for it to allocate 104 KB per frame when handed a buffer to
+//! reuse. Pushed, which is what a frontend gets (ADR-0025), it *is* on the
+//! emulation thread, fifty times a second, and the swap chain exists so that
+//! publishing a frame costs an exchange of two boxes rather than a copy or an
+//! allocation.
 
 use std::sync::Arc;
 
@@ -25,7 +28,9 @@ use rkw_debug::Debugger;
 use rkw_debug::command::Command;
 use rkw_debug::emu::{Config, Emu, RunState};
 use rkw_spectrum::keymap::{HostKey, HostKeys, KeyMap};
-use rkw_spectrum::{AudioMachine, Flash, Framebuffer, SCREEN_BASE, Saving, Spectrum};
+use rkw_spectrum::{
+    AudioMachine, Flash, Framebuffer, Presenting, SCREEN_BASE, Saving, Spectrum, present,
+};
 use rkw_tape::Tap;
 use z80::Cpu;
 
@@ -347,4 +352,54 @@ fn rendering_into_a_reused_framebuffer_does_not_allocate() {
     let (_, allocations) =
         alloc_check::count(|| rkw_spectrum::decode(&machine, SCREEN_BASE, Flash::Normal));
     assert!(allocations > 0);
+}
+
+#[test]
+fn the_slice_loop_presenting_frames_does_not_allocate() {
+    // The frontend's own machine, three wrappers deep: a Spectrum making sound
+    // and painting each finished frame for a window. Every per-frame host job
+    // in the program runs in this one, which is the case a frontend actually
+    // has.
+    let (cpu, spectrum) = machine();
+    let (tx, _rx) = ring::channel(1 << 16);
+    let (sink, mut frames) = present::channel();
+    let machine = Presenting::new(AudioMachine::with_defaults(spectrum, 48_000, tx), sink);
+
+    let (_, allocations) = alloc_check::count(Framebuffer::new);
+    assert!(
+        allocations > 0,
+        "allocating a framebuffer allocated nothing, so the counting allocator \
+         is not installed and this test proves nothing"
+    );
+
+    let (mut emu, mut handle) = Emu::new(
+        cpu,
+        machine,
+        Debugger::new(),
+        Config {
+            event_capacity: 16,
+            command_capacity: 16,
+            control_interval: 224,
+            log_capacity: 0,
+        },
+    );
+    handle.send(Command::Resume).unwrap();
+
+    const SLICES: usize = 2_000;
+    let (_, allocations) = alloc_check::count(|| {
+        for _ in 0..SLICES {
+            assert_eq!(emu.slice(), RunState::Running);
+            // A consumer taking frames as they come, because a swap that only
+            // ever ran on one side would not be exercising the exchange.
+            frames.take();
+        }
+    });
+    assert_eq!(
+        allocations, 0,
+        "{SLICES} slices publishing frames allocated {allocations} times"
+    );
+
+    // The run did what it was supposed to: frames were painted and taken.
+    assert!(emu.machine.published() >= 6, "{}", emu.machine.published());
+    assert!(frames.taken() >= 6, "{}", frames.taken());
 }

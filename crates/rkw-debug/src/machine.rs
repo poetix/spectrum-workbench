@@ -45,6 +45,18 @@ pub trait Machine: Bus + Peek + Clock {
     /// The clock has reached [`Machine::next_event`]. Raise whatever was due
     /// and schedule the one after it.
     fn service_event(&mut self) {}
+
+    /// Every key the user is holding down, as a bit per key.
+    ///
+    /// The layout is the machine's own — a Spectrum reads this as its eight
+    /// half-rows of five, low half-row first — and a machine with no keyboard
+    /// ignores it, which is why there is a default. What matters here is where
+    /// it arrives from: [`Command::Keys`](crate::command::Command::Keys), so
+    /// that a keypress is applied at a T-state the machine agrees with and
+    /// lands in the replay log with everything else the user did. A frontend
+    /// that stored the matrix in an atomic the ULA read directly would be
+    /// faster by 64 µs and would make every recorded session unreproducible.
+    fn set_keys(&mut self, _matrix: u64) {}
 }
 
 impl Machine for FlatMemory {}

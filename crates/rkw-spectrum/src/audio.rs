@@ -217,6 +217,10 @@ impl Machine for AudioMachine {
         }
         self.spectrum.service_event();
     }
+
+    fn set_keys(&mut self, matrix: u64) {
+        self.spectrum.set_keys(matrix);
+    }
 }
 
 impl std::fmt::Debug for AudioMachine {

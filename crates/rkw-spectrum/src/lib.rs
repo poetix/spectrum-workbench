@@ -53,6 +53,9 @@
 //!   (ADR-0021).
 //! - [`save`] wraps it in one that writes down what it puts on the `MIC` line,
 //!   for the same reason and in the same place.
+//! - [`present`] wraps it in one that paints each finished frame into a buffer
+//!   the window thread can swap for, because a picture is far too big to go
+//!   through the event ring (ADR-0025).
 
 pub mod audio;
 pub mod contention;
@@ -60,6 +63,7 @@ pub mod frame;
 pub mod keyboard;
 pub mod keymap;
 pub mod memory;
+pub mod present;
 pub mod save;
 pub mod screen;
 pub mod spectrum;
@@ -74,6 +78,7 @@ pub use frame::{
 pub use keyboard::{Key, Keyboard};
 pub use keymap::{HostKey, HostKeys, KeyMap};
 pub use memory::{Memory, RomTooLarge, SCREEN_BASE};
+pub use present::{FrameSink, FrameSource, Presenting};
 pub use save::Saving;
 pub use screen::{DISPLAY_BYTES, Flash, Framebuffer, PALETTE, decode, decode_into};
 pub use spectrum::Spectrum;

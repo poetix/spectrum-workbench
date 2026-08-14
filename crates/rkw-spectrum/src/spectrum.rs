@@ -27,6 +27,7 @@ use z80::Bus;
 use z80::disasm::Peek;
 
 use crate::contention;
+use crate::keyboard::Keyboard;
 use crate::memory::{Memory, RomTooLarge, SCREEN_BASE};
 use crate::screen::{Flash, Framebuffer};
 use crate::tape::Tape;
@@ -361,5 +362,14 @@ impl Machine for Spectrum {
         if self.frame_due() {
             self.ula.end_frame();
         }
+    }
+
+    /// Put the whole matrix down at once: see [`Keyboard::from_matrix`].
+    ///
+    /// A frontend sends the state it is holding rather than the change, so
+    /// this replaces the keyboard instead of editing it, and a machine whose
+    /// window has just lost focus is a matrix of zero like any other.
+    fn set_keys(&mut self, matrix: u64) {
+        self.ula.keyboard = Keyboard::from_matrix(matrix);
     }
 }

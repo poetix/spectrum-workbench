@@ -46,6 +46,18 @@ pub enum Command {
     ClearAll,
     /// Write a byte into memory without the machine noticing an access.
     Poke { addr: u16, value: u8 },
+    /// The state of the machine's input matrix: every key that is down, as
+    /// forty bits the machine reads however its hardware does.
+    ///
+    /// A whole matrix rather than a press or a release, because a frontend
+    /// rebuilds it from the host keys it is holding and a lost edge would
+    /// leave a key down forever. Sending the state is idempotent; sending an
+    /// edge is not.
+    ///
+    /// What the bits mean is the machine's business — see
+    /// [`Machine::set_keys`](crate::machine::Machine::set_keys). This crate
+    /// only carries them, and a machine with no keyboard ignores them.
+    Keys(u64),
     /// Reset the CPU. Not a power-on: the register file survives, as it does
     /// on real hardware.
     Reset,
@@ -72,6 +84,14 @@ const POKE: u64 = 12;
 const QUIT: u64 = 13;
 const RESET: u64 = 14;
 const SET_PC: u64 = 15;
+const KEYS: u64 = 16;
+
+/// How much of a [`Command::Keys`] word is matrix: forty keys, which is what
+/// fits above the kind byte and is what a Spectrum has. A sender with a wider
+/// matrix than this needs a wider record, and would find out here rather than
+/// by having its top bits quietly dropped.
+const KEYS_BITS: u32 = 40;
+const KEYS_MASK: u64 = (1 << KEYS_BITS) - 1;
 
 /// A command and the T-state at which the emulation thread applied it.
 ///
@@ -105,6 +125,7 @@ impl Record for Command {
             Command::Unwatch(addr) => UNWATCH | u64::from(addr) << 8,
             Command::ClearAll => CLEAR_ALL,
             Command::Poke { addr, value } => POKE | u64::from(addr) << 8 | u64::from(value) << 24,
+            Command::Keys(matrix) => KEYS | (matrix & KEYS_MASK) << 8,
             Command::Reset => RESET,
             Command::SetPc(addr) => SET_PC | u64::from(addr) << 8,
             Command::Quit => QUIT,
@@ -136,6 +157,7 @@ impl Record for Command {
             UNWATCH => Some(Command::Unwatch(addr)),
             CLEAR_ALL => Some(Command::ClearAll),
             POKE => Some(Command::Poke { addr, value }),
+            KEYS => Some(Command::Keys(word >> 8 & KEYS_MASK)),
             RESET => Some(Command::Reset),
             SET_PC => Some(Command::SetPc(addr)),
             QUIT => Some(Command::Quit),
@@ -180,6 +202,9 @@ mod tests {
         },
         Command::Reset,
         Command::SetPc(0x8000),
+        Command::Keys(0),
+        Command::Keys(KEYS_MASK),
+        Command::Keys(0x00_5A_A5_5A_A5),
         Command::Quit,
     ];
 
@@ -188,6 +213,15 @@ mod tests {
         for c in ALL {
             assert_eq!(Command::decode(c.encode()), Some(*c), "{c:?}");
         }
+    }
+
+    /// The forty bits are all there is room for above the kind byte, so a
+    /// sender that put something in bit 40 would get it back as zero rather
+    /// than as a stray key.
+    #[test]
+    fn a_matrix_wider_than_the_record_is_truncated_rather_than_corrupting_the_kind() {
+        let too_wide = Command::Keys(1 << KEYS_BITS | 1);
+        assert_eq!(Command::decode(too_wide.encode()), Some(Command::Keys(1)));
     }
 
     #[test]

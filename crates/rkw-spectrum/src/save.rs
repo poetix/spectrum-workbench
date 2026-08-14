@@ -231,4 +231,8 @@ impl<M: Machine + AsRef<Spectrum>> Machine for Saving<M> {
         }
         self.inner.service_event();
     }
+
+    fn set_keys(&mut self, matrix: u64) {
+        self.inner.set_keys(matrix);
+    }
 }

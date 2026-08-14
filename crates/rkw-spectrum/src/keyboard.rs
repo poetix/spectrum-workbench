@@ -43,6 +43,10 @@ pub const HALF_ROWS: usize = 8;
 /// Keys in a half-row, which is the width of the read.
 pub const KEYS_PER_HALF_ROW: usize = 5;
 
+/// The bits of a half-row that are keys. The other three are the ULA's, and a
+/// matrix arriving from outside is masked with this rather than trusted.
+const KEY_BITS: u8 = (1 << KEYS_PER_HALF_ROW) - 1;
+
 /// The keys of the matrix, in the order the hardware has them: half-row `A8`
 /// first, and within each half-row the bit-0 key first.
 ///
@@ -272,6 +276,39 @@ impl Keyboard {
     /// The half-rows, a set bit per key held, for a snapshot writer.
     pub fn rows(&self) -> &[u8; HALF_ROWS] {
         &self.rows
+    }
+
+    /// A keyboard from half-rows written down elsewhere, such as a snapshot.
+    pub fn from_rows(rows: [u8; HALF_ROWS]) -> Keyboard {
+        Keyboard {
+            rows: rows.map(|row| row & KEY_BITS),
+        }
+    }
+
+    /// The whole matrix as one word: five bits per half-row, the first
+    /// half-row lowest, a set bit per key held.
+    ///
+    /// This is the shape input travels in (ADR-0024). Forty bits fit above a
+    /// command's kind byte, which is the reason a keypress can go through the
+    /// command ring at all and therefore the reason it lands in the replay
+    /// log.
+    pub fn matrix(&self) -> u64 {
+        self.rows
+            .iter()
+            .enumerate()
+            .fold(0, |bits, (half_row, row)| {
+                bits | u64::from(row & KEY_BITS) << (half_row * KEYS_PER_HALF_ROW)
+            })
+    }
+
+    /// The inverse of [`Keyboard::matrix`]. Bits above the fortieth are not a
+    /// key and are dropped.
+    pub fn from_matrix(matrix: u64) -> Keyboard {
+        let mut rows = [0; HALF_ROWS];
+        for (half_row, row) in rows.iter_mut().enumerate() {
+            *row = (matrix >> (half_row * KEYS_PER_HALF_ROW)) as u8 & KEY_BITS;
+        }
+        Keyboard { rows }
     }
 }
 

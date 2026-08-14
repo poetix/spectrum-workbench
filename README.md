@@ -15,9 +15,9 @@ and listings, and a gdb-style REPL that assembles a file and runs it. The
 hardware is the 48K memory map, the screen, the frame interrupt, the keyboard
 matrix, the beeper and the tape, which between them are enough that **the real
 48K ROM boots to a BASIC prompt, a program can be typed in and run, and
-`LOAD ""` reads a `.tap` or a `.tzx` off the waveform**. There is no window and
-nothing opens an audio device: the picture comes out as a framebuffer, the sound
-comes out as a sample ring, and the only front end is the debugger.
+`LOAD ""` reads a `.tap` or a `.tzx` off the waveform**. There is a window now:
+`rkw` opens one, blits the framebuffer through `pixels`, types into the matrix
+and plays the beeper through `cpal`.
 
 ## What works
 
@@ -360,7 +360,49 @@ program counter reaches `LD-BYTES`: it puts the block in memory and returns in
 the same T-state. It is a convenience over the waveform rather than an
 alternative to it.
 
-### Driving it
+### The window
+
+`rkw` is the windowed front end: a machine, a keyboard and a speaker.
+
+```sh
+cargo run --release -p rkw-gui -- --rom crates/rkw-spectrum/tests/fixtures/48.rom
+cargo run --release -p rkw-gui -- --rom 48.rom --tape game.tzx --scale 4
+```
+
+| Key | |
+| --- | --- |
+| `F5` | pause or resume |
+| `F8` | speed: 1x, 2x, as fast as it will go |
+| `F9` | mute or unmute |
+| `F10` | reset |
+| `F11` | full screen |
+| `F4` | quit |
+
+Every other key is the machine's, which is why the frontend's own are all
+function keys: a Spectrum uses every letter, both shifts, `ENTER` and `SPACE`,
+and `BREAK` is `CAPS SHIFT` and `SPACE`. `ESCAPE` is `BREAK` rather than a way
+out of the window.
+
+Nothing in the window keeps time. The emulation thread paces itself on how full
+the sample ring is — it runs frames until it is a few ahead of the speaker, then
+waits — so the frame rate is the audio device's own rate expressed in frames,
+and there is no 50 Hz timer to drift against it
+([ADR-0025](adr/0025-frames-and-sound-leave-by-their-own-doors.md)). A host with
+no output device paces on the wall clock instead and says so.
+
+Keys go the other way as commands, not as shared state: `Command::Keys` carries
+the whole forty-bit matrix through the lossless ring of ADR-0007, so a keypress
+is applied at a T-state the machine agrees with and is recorded in the command
+log with everything else
+([ADR-0024](adr/0024-input-goes-through-the-command-log.md)). A recorded session
+therefore replays with the typing in it, which is what tickets 0026 and 0029
+need and what an atomic full of key bits could not give.
+
+The picture crosses threads as a swap chain rather than a copy: `Presenting<M>`
+paints each finished frame on the emulation thread and exchanges two boxes with
+the window, which never blocks the machine and never allocates.
+
+### Driving it from a prompt
 
 `rkwdbg` is the terminal front end: it assembles a source file, loads it, and
 gives you a gdb-style prompt.
@@ -458,6 +500,7 @@ crates/
   rkw-audio/      the beeper: speaker edges, resampling, the speaker model
   rkw-cli/        rkwdbg: the terminal front end
   rkw-dbginfo/    the debug info format, and source resolution over it
+  rkw-gui/        rkw: the windowed front end — winit, pixels and cpal
   rkw-debug/      debugger core, emulation thread, command layer
   rkw-spectrum/   the 48K machine: memory map, ULA, contention, screen, sound,
                   tape deck
@@ -475,7 +518,7 @@ scripts/
   fetch-rom.sh
 ```
 
-Planned: `rkw-dap` (Debug Adapter Protocol front end), `rkw-gui`.
+Planned: `rkw-dap` (Debug Adapter Protocol front end).
 
 ## Design
 
