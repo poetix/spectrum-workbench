@@ -51,3 +51,9 @@ the default cadence is a 64 KB copy every 2.8 ms.
 Paging (0012 onwards) makes a checkpoint bigger and makes "all of memory" mean
 all banks plus the paging state. Sizing the ring in bytes rather than in
 checkpoints is probably the right shape from the start.
+
+0033 adds 12 KB of display capture to the machine — what the ULA fetched, per
+cell per scanline — which is a fifth again on top of the 64 KB and cannot be
+regenerated on restore, since it holds precisely the history the current memory
+no longer contains. 0034's border log is small by comparison. Both are plain
+fixed-size state, so neither complicates the copy; they change the budget.
