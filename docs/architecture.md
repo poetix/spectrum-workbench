@@ -208,6 +208,35 @@ machine has got, and that is the signal the front end should pace on (ADR-0021,
 ticket 0019). An emulator paced by its audio buffer needs no other clock and
 never has to correct for drift.
 
+## What a running tape costs
+
+The slice loop was designed around a machine with one scheduled event, fifty
+times a second. A tape running adds a second schedule at roughly 2 kHz — a
+pilot pulse is 2168 T-states and a data half-pulse 855, so between 1,600 and
+4,100 events a second — which is a fortyfold increase in how often the loop
+stops, services and starts again.
+
+The bound is the same one the control tick was measured against, and the tape
+sits well inside it: slicing every 224 T-states cost nothing worth naming, and
+a tape edge every 855 is four times *less* frequent than that. What each one
+does is a few branches through a pulse state machine. A loop already stopping
+every scanline for the command ring is not troubled by stopping a second time
+between some of them.
+
+Two things follow that are not about throughput:
+
+- **A tape running is a hard floor on latency, not a cost.** The machine cannot
+  outrun the tape, because the tape's edges are on the emulated clock. Loading
+  a real image takes as long as it took in 1982 unless the trap is used.
+- **The recorder is per frame, not per edge.** Saving decodes on the frame
+  boundary out of the log the beeper already reads, so it costs a walk over a
+  few hundred `u32`s a frame and nothing at all in the bus.
+
+`tests/no_alloc.rs` covers the tape case as a third `Machine`
+monomorphisation — `Emu<Saving<Spectrum>>` — for the reason the beeper needed
+its own: the per-frame work of a wrapper is not reached by a test that runs the
+machine underneath it.
+
 ## Performance builds
 
 `[profile.release]` uses fat LTO and a single codegen unit. An interpreter is

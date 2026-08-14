@@ -1,0 +1,16 @@
+[package]
+name = "rkw-tape"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Spectrum tapes: TAP blocks, the waveform they stand for, and the waveform read back"
+
+# Nothing, for the reason rkw-audio has nothing (ADR-0021): a crate that cannot
+# name a `Spectrum` cannot acquire machine state by accident. Everything here is
+# counted in T-states, and what a T-state is worth arrives as a parameter.
+[dependencies]
+
+[lints]
+workspace = true

@@ -56,8 +56,13 @@ dependencies = [
  "alloc-check",
  "rkw-audio",
  "rkw-debug",
+ "rkw-tape",
  "z80",
 ]
+
+[[package]]
+name = "rkw-tape"
+version = "0.1.0"
 
 [[package]]
 name = "z80"

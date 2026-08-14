@@ -178,6 +178,9 @@ fn rendering_part_way_through_a_frame_shows_the_border_of_the_last_complete_one(
 
     // The write happened in frame zero, which is still in progress.
     assert_eq!(machine.frame().pixel(0, 0), 0);
-    machine.service_event();
+    // And presenting it is the frame boundary's job. `service_event` is called
+    // for a tape edge as well as for the interrupt (0016), so it does what is
+    // due at the clock it is called at rather than assuming the frame ended.
+    run_to(&mut cpu, &mut machine, T_STATES_PER_FRAME);
     assert_eq!(machine.frame().pixel(0, 0), 1);
 }
