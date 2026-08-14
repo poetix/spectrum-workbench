@@ -33,11 +33,11 @@ Decoding follows the octal decomposition of the opcode byte rather than a flat
 undocumented encodings fall out instead of being enumerated.
 
 The core never adds up T-states itself. Every access is issued to the `Bus` as
-a discrete machine cycle of its real duration, and purely internal cycles are
-explicit. This is what makes it possible to add the Spectrum's contended memory
-later without touching a single instruction implementation: contention is
-defined as wait states inserted at particular cycles, so the cycles have to be
-in the right places before the quirks can be.
+a discrete machine cycle of its real duration, and internal cycles are explicit
+and carry the address the CPU is holding through them. That is what the
+Spectrum's contended memory is built on: contention is wait states inserted at
+particular cycles to particular addresses, so both have to be right before the
+quirks can be.
 
 ### Validation
 
@@ -178,8 +178,39 @@ The frame interrupt is derived from the clock rather than raised as a flag, so a
 machine stepped across a frame boundary in the debugger sees exactly what a
 free-running one does.
 
-Contention is not here — that is ticket 0020, and ADR-0002 means it is a change
-to the `Bus` implementation and to nothing else.
+### Contention and the floating bus
+
+For 128 T-states of each of the 192 display lines the ULA is fetching the bytes
+it is about to draw, out of the same 16K of RAM the CPU wants. Where the two
+collide the ULA wins and the CPU is held, for six T-states down to none by where
+in the ULA's eight T-state fetch group the access lands. That is what makes
+timing-sensitive software work, and it is why a demo's timing loop lives above
+`0x8000`.
+
+The delay is computed from an eight-byte pattern rather than looked up in a
+68 KB table
+([ADR-0009](adr/0009-compute-contention-rather-than-tabulating-it.md)) — a
+decision the measurements in
+`crates/rkw-spectrum/tests/throughput.rs` did not confirm, and ticket 0032 is to
+settle it. The frame constants it needs were checked against Fuse rather than
+remembered.
+
+The other side of the same fact is the floating bus: whatever the ULA fetched is
+left on the data bus, so a read of a port nothing answers picks it up. A program
+can spin on `IN A,(C)` until the answer stops being `0xFF` and know it is at the
+top-left of the display, with no interrupt and no counting — which is how a
+great deal of software gets a tear-free screen, and is a test in
+`crates/rkw-spectrum/tests/contention.rs`.
+
+**This is where ADR-0002's promise turned out to be wrong.** It held that
+contention would be a change to one `Bus` implementation and to no instruction.
+It is not, because internal cycles hold an address too — the Z80 leaves the last
+address it used on the bus, and the ULA, which has only the address lines to go
+on, cannot tell an internal cycle from a read and stalls it just the same.
+`INC (HL)` in the contended bank is held four times, not three. Which address is
+held is instruction-local knowledge, so the core had to state it:
+`tick(n)` became `tick_at(addr, n)` at thirty-one call sites. See
+[ADR-0023](adr/0023-internal-cycles-carry-the-address-they-hold.md).
 
 ### Booting the ROM
 
@@ -200,6 +231,7 @@ on `10>PRINT "hello"` rather than on forty thousand pixels. What that cannot
 see — the pixels within a cell, the attributes, the border — is covered by a
 pinned hash of the framebuffer. Nothing in the machine is seeded by the host, so
 the boot is deterministic down to the T-state.
+
 ### The beeper
 
 The speaker is one bit of the same port, and it is entirely a matter of timing:
@@ -377,7 +409,8 @@ crates/
   rkw-cli/        rkwdbg: the terminal front end
   rkw-dbginfo/    the debug info format, and source resolution over it
   rkw-debug/      debugger core, emulation thread, command layer
-  rkw-spectrum/   the 48K machine: memory map, ULA, screen, sound, tape deck
+  rkw-spectrum/   the 48K machine: memory map, ULA, contention, screen, sound,
+                  tape deck
   rkw-tape/       TAP and TZX, the waveform they stand for, and the way back
   z80/            CPU core and disassembler
 adr/              architecture decision records
@@ -400,8 +433,10 @@ Decisions are recorded as ADRs in [`adr/`](adr/). The ones that shape
 everything else:
 
 - [ADR-0002](adr/0002-machine-cycle-granular-bus-interface.md) — the CPU never
-  sums T-states; every access is a discrete machine cycle. This is what lets
-  contended memory be added later without touching a single instruction.
+  sums T-states; every access is a discrete machine cycle. It also predicted
+  that contention would touch no instruction, which
+  [ADR-0023](adr/0023-internal-cycles-carry-the-address-they-hold.md) is the
+  record of being wrong about.
 - [ADR-0001](adr/0001-decode-opcodes-by-octal-decomposition.md) — decoding by
   the octal decomposition of the opcode byte, so the undocumented instructions
   fall out of the structure rather than being enumerated.

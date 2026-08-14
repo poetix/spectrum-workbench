@@ -165,6 +165,10 @@ impl<M: Machine> Bus for Saving<M> {
         self.inner.tick(t);
     }
 
+    fn tick_at(&mut self, addr: u16, t: u32) {
+        self.inner.tick_at(addr, t);
+    }
+
     fn fetch_opcode(&mut self, addr: u16) -> u8 {
         self.inner.fetch_opcode(addr)
     }

@@ -55,6 +55,27 @@ Applied only to addresses in 0x4000-0x7FFF.
   timings differ in their constants but not in shape, so this is not expected
   to bite.
 
-**Caveat:** the constants above are from memory and must be checked against a
-published reference before ticket 0020 lands. The shape of the solution is the
-decision here; the numbers are not yet load-bearing.
+**Checked, in ticket 0020.** The constants were verified against Fuse — the
+project this repository's conformance data and ROM already come from (ADR-0005)
+— at `libspectrum/timings.c`, `fuse/spectrum.c` and `fuse/machines/spec48.c`.
+Everything in `crates/rkw-spectrum/src/frame.rs` agrees with the 48K row of
+Fuse's table. The pattern is right. `FIRST_CONTENDED` is 14,335 and not 14,336:
+contention starts one T-state *before* the ULA's first fetch, because an access
+beginning on that T-state would still be holding the bus when the ULA wants it.
+The sketch above is otherwise correct as written.
+
+**The performance claim did not survive measurement.**
+`crates/rkw-spectrum/tests/throughput.rs` builds the 68 KB table this ADR
+refused and runs the machine on it. On the development machine the table is
+about 2.5x faster as a lookup and about 1.3x faster in the emulator, both of
+which are the opposite of what is argued above.
+
+That is not enough to overturn the decision, and it is not enough to keep it
+either. The argument rests on two conditions the measurement does not meet: an
+L1d of 32-48 KB, where the table does not fit, against the 128 KB of the machine
+it was measured on; and an emulated program with a working set of kilobytes,
+against a benchmark loop that touches 256 bytes. Both would move the result
+towards the table losing, and neither can be tested here. Ticket 0032 is to
+settle it on an x86 part with a realistic workload. Until then the arithmetic
+stays, on the understanding that its justification is now an open question
+rather than a finding.

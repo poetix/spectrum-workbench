@@ -34,6 +34,10 @@
 //!   source and a base address rather than a machine, so the debugger's screen
 //!   pane, a `.scr` file and the live display all render through it
 //!   (ADR-0020).
+//! - [`contention`] is the ULA taking the memory bus away from the CPU, and
+//!   the byte it leaves behind on the data bus when it does. The two are the
+//!   same fact seen from either side, which is why they are one module
+//!   (ADR-0009, ADR-0023).
 //! - [`ula`] is the frame clock, the interrupt, the flash cadence, the border
 //!   — the last of which is recorded per scanline, because that is how
 //!   Spectrum software makes timing visible — and the two halves of port
@@ -51,6 +55,7 @@
 //!   for the same reason and in the same place.
 
 pub mod audio;
+pub mod contention;
 pub mod frame;
 pub mod keyboard;
 pub mod keymap;
@@ -62,6 +67,7 @@ pub mod tape;
 pub mod ula;
 
 pub use audio::AudioMachine;
+pub use contention::{floating_bus, is_contended};
 pub use frame::{
     CLOCK_HZ, HEIGHT, LINES_PER_FRAME, T_STATES_PER_FRAME, T_STATES_PER_LINE, WIDTH, line_of,
 };

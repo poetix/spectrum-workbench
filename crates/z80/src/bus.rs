@@ -2,10 +2,28 @@
 //!
 //! The core never adds up T-states itself. Every access is issued as a discrete
 //! machine cycle with its real duration, and purely internal cycles are issued
-//! as explicit [`Bus::tick`] calls. That is what makes it possible to bolt the
-//! Spectrum's ULA contention onto this core later without touching the
-//! instruction implementations: contention is a function of *when* an access
-//! happens, so the timing has to be right before the quirks can be.
+//! as explicit [`Bus::tick_at`] calls carrying the address the CPU is holding
+//! while they run. That is what makes it possible to bolt the Spectrum's ULA
+//! contention onto this core: contention is a function of *when* an access
+//! happens and *what address* it is to, so the timing has to be right before
+//! the quirks can be.
+//!
+//! # Why an internal cycle has an address
+//!
+//! ADR-0002 gave internal cycles a bare `tick(n)`, on the reasoning that the
+//! CPU is not driving the bus in a way anything can see. That is not true of
+//! this machine. The Z80 leaves the last address it used on the address bus for
+//! the whole of an internal cycle, and the ULA arbitrates on the address lines
+//! alone: it cannot tell an internal cycle from a read, so it stalls the CPU on
+//! each of those T-states individually if the address happens to be in the
+//! contended bank. `INC (HL)` with `HL` in the lower 16K is contended four
+//! times, not three, and `LDIR` copying within it is contended seven times per
+//! iteration.
+//!
+//! Which address is held is instruction-local knowledge — `IR` after an opcode
+//! fetch, the operand address after a memory cycle, `PC` after a displacement
+//! byte — so the bus cannot recover it and the core has to state it. See
+//! ADR-0023.
 
 /// Everything the CPU can do to the rest of the machine.
 ///
@@ -13,15 +31,35 @@
 /// cycle wrappers have default bodies that spend the standard number of
 /// T-states. A contended implementation overrides the wrappers instead, keeping
 /// the timing decisions in one place.
+///
+/// A *decorator* around another bus must forward every wrapper, not just the
+/// raw accessors. Overriding `read` alone routes around a contended
+/// implementation's `read_cycle` and silently takes the contention with it.
 pub trait Bus {
     fn read(&mut self, addr: u16) -> u8;
     fn write(&mut self, addr: u16, value: u8);
     fn input(&mut self, port: u16) -> u8;
     fn output(&mut self, port: u16, value: u8);
 
-    /// Burn `t` T-states of internal CPU activity, during which the CPU is not
-    /// driving the address bus in a way anything else can see.
+    /// Burn `t` T-states during which the CPU is driving nothing the rest of
+    /// the machine can arbitrate on: the wait states of an interrupt
+    /// acknowledge, and nothing else.
+    ///
+    /// Internal cycles that happen mid-instruction are [`Bus::tick_at`]; they
+    /// do hold an address, and on a contended machine that address is what
+    /// decides whether they are stalled.
     fn tick(&mut self, t: u32);
+
+    /// Burn `t` T-states of internal CPU activity with `addr` held on the
+    /// address bus.
+    ///
+    /// This is `t` separate one-T-state cycles rather than one cycle of `t`
+    /// T-states, because that is what the ULA sees and each of them is stalled
+    /// on its own account.
+    fn tick_at(&mut self, addr: u16, t: u32) {
+        let _ = addr;
+        self.tick(t);
+    }
 
     /// M1: opcode fetch. Four T-states — three for the read, one for the
     /// refresh cycle that follows it.

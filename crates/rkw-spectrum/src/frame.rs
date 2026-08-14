@@ -24,10 +24,18 @@
 //! — 312 lines of 224 is 69,888 T-states, and at 3.5 MHz that is 50.08 frames
 //! per second, the "50 Hz" everything on this machine is paced by.
 //!
-//! **These constants are the ones ticket 0020 has to check against a published
-//! reference before contention lands.** Nothing here is timing-critical on its
-//! own: a frame interrupt at the wrong T-state makes software feel wrong, where
-//! contention at the wrong T-state makes it render wrong.
+//! **Checked, in ticket 0020**, against Fuse — the project this crate's ROM and
+//! the CPU conformance data already come from (ADR-0005). Every number below
+//! agrees with the 48K row of `libspectrum/timings.c`, which spells the same
+//! frame as 24 + 128 + 24 + 48 T-states across and 48 + 192 + 48 + 24 lines
+//! down. Where it and this module differ is only in how the 120 lines that are
+//! not display are divided between border and retrace, which decides how much
+//! of the border a frontend shows and nothing else; the T-state geometry that
+//! contention depends on is identical.
+//!
+//! The one number contention needs that is not here is where the pattern starts,
+//! which is one T-state *before* [`FIRST_DISPLAY_T`] and lives in
+//! [`crate::contention`] next to the pattern it belongs to.
 
 /// The Z80 clock, in Hz.
 pub const CLOCK_HZ: u64 = 3_500_000;
@@ -51,7 +59,9 @@ pub const INTERRUPT_LENGTH: u64 = 32;
 pub const FIRST_DISPLAY_LINE: usize = 64;
 
 /// The T-state, measured from the interrupt, at which the ULA starts fetching
-/// display bytes. Where contention begins, when there is contention (0020).
+/// display bytes — and so where the floating bus starts handing back something
+/// other than `0xFF`. Contention starts one T-state earlier; see
+/// [`crate::contention::FIRST_CONTENDED_T`].
 pub const FIRST_DISPLAY_T: u64 = FIRST_DISPLAY_LINE as u64 * T_STATES_PER_LINE;
 
 /// The frame line the visible picture starts on: the first line after vertical

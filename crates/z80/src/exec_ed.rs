@@ -72,7 +72,8 @@ impl Cpu {
                 self.regs.wz = port.wrapping_add(1);
             }
             2 => {
-                bus.tick(7);
+                // SBC/ADC HL,rp[p]
+                bus.tick_at(self.regs.ir(), 7);
                 let hl = self.regs.hl();
                 let rhs = self.regs.get16(RP_TABLE[p as usize]);
                 let result = if q == 0 {
@@ -113,17 +114,17 @@ impl Cpu {
     fn execute_ed_misc(&mut self, bus: &mut impl Bus, y: u8) {
         match y {
             0 => {
-                bus.tick(1);
+                bus.tick_at(self.regs.ir(), 1);
                 self.regs.i = self.regs.a;
             }
             1 => {
-                bus.tick(1);
+                bus.tick_at(self.regs.ir(), 1);
                 self.regs.r = self.regs.a;
             }
             2 | 3 => {
                 // LD A,I / LD A,R. P/V reflects IFF2, which is how interrupt
                 // state is read back.
-                bus.tick(1);
+                bus.tick_at(self.regs.ir(), 1);
                 let value = if y == 2 { self.regs.i } else { self.regs.r };
                 self.regs.a = value;
                 let mut f = self.regs.f & flag::C;
@@ -142,7 +143,7 @@ impl Cpu {
                 // RRD / RLD: rotate a BCD digit between A and (HL).
                 let addr = self.regs.hl();
                 let mem = bus.read_cycle(addr);
-                bus.tick(4);
+                bus.tick_at(addr, 4);
                 let (new_a, new_mem) = if y == 4 {
                     // RRD
                     (
@@ -191,7 +192,7 @@ impl Cpu {
         let de = self.regs.de();
         let value = bus.read_cycle(hl);
         bus.write_cycle(de, value);
-        bus.tick(2);
+        bus.tick_at(de, 2);
 
         self.regs.set_hl(hl.wrapping_add(delta));
         self.regs.set_de(de.wrapping_add(delta));
@@ -215,7 +216,9 @@ impl Cpu {
         self.regs.q = f;
 
         if repeating && bc != 0 {
-            bus.tick(5);
+            // Still the destination the byte was written to: the increment of
+            // DE is bookkeeping, and the chip is holding the old value.
+            bus.tick_at(de, 5);
             self.regs.pc = self.regs.pc.wrapping_sub(2);
             self.regs.wz = self.regs.pc.wrapping_add(1);
         }
@@ -225,7 +228,7 @@ impl Cpu {
     fn block_compare(&mut self, bus: &mut impl Bus, delta: u16, repeating: bool) {
         let hl = self.regs.hl();
         let value = bus.read_cycle(hl);
-        bus.tick(5);
+        bus.tick_at(hl, 5);
 
         self.regs.set_hl(hl.wrapping_add(delta));
         let bc = self.regs.bc().wrapping_sub(1);
@@ -258,7 +261,7 @@ impl Cpu {
         self.regs.q = f;
 
         if repeating && bc != 0 && result != 0 {
-            bus.tick(5);
+            bus.tick_at(hl, 5);
             self.regs.pc = self.regs.pc.wrapping_sub(2);
             self.regs.wz = self.regs.pc.wrapping_add(1);
         } else {
@@ -268,7 +271,7 @@ impl Cpu {
 
     /// `INI`/`IND`/`INIR`/`INDR`.
     fn block_in(&mut self, bus: &mut impl Bus, delta: u16, repeating: bool) {
-        bus.tick(1);
+        bus.tick_at(self.regs.ir(), 1);
         let port = self.regs.bc();
         let value = bus.input_cycle(port);
         self.regs.wz = port.wrapping_add(delta);
@@ -283,14 +286,15 @@ impl Cpu {
         self.block_io_flags(value, self.regs.c.wrapping_add(delta as u8), b);
 
         if repeating && b != 0 {
-            bus.tick(5);
+            // The address the byte was written to, still on the bus.
+            bus.tick_at(hl, 5);
             self.regs.pc = self.regs.pc.wrapping_sub(2);
         }
     }
 
     /// `OUTI`/`OUTD`/`OTIR`/`OTDR`.
     fn block_out(&mut self, bus: &mut impl Bus, delta: u16, repeating: bool) {
-        bus.tick(1);
+        bus.tick_at(self.regs.ir(), 1);
         let hl = self.regs.hl();
         let value = bus.read_cycle(hl);
 
@@ -307,7 +311,10 @@ impl Cpu {
         self.block_io_flags(value, self.regs.l, b);
 
         if repeating && b != 0 {
-            bus.tick(5);
+            // The port, not the source address: this group's last cycle was
+            // the OUT, so BC is what is left on the bus — with the decremented
+            // B in it.
+            bus.tick_at(port, 5);
             self.regs.pc = self.regs.pc.wrapping_sub(2);
         }
     }

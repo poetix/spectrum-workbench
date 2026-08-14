@@ -3,6 +3,7 @@ id: "ADR-0002"
 title: Machine-cycle-granular bus interface
 date: 2026-08-11
 status: accepted
+amended-by: ADR-0023
 ---
 
 ## Context
@@ -48,6 +49,11 @@ does not assert until one T-state in and the ULA samples the bus at that point.
 - Contention becomes a change to one `Bus` implementation and touches no
   instruction. If stage 0020 turns out to need changes in `cpu.rs`, that is a
   signal something in the core is wrong.
+
+  **It did.** `tick(n)` carries no address, and the ULA contends internal
+  cycles against the address the CPU is holding through them. See ADR-0023,
+  which replaces `tick` with `tick_at(addr, t)` at every mid-instruction call
+  site. The rest of this decision stands.
 - The Fuse conformance suite records the time at which every bus cycle
   completed, so this structure is directly testable — and 1331 of 1335 cases
   pass, which validates cycle *placement* and not merely instruction totals.

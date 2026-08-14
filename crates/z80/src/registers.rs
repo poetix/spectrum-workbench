@@ -294,6 +294,15 @@ impl Regs {
         }
     }
 
+    /// `I` and `R` as the 16-bit value the chip puts on the address bus during
+    /// the refresh half of an M1 cycle — and leaves there for any internal
+    /// cycles that follow it, which is why anything arbitrating on addresses
+    /// needs it.
+    #[inline]
+    pub fn ir(&self) -> u16 {
+        (u16::from(self.i) << 8) | u16::from(self.r)
+    }
+
     /// Bump the refresh counter, preserving bit 7 as the real chip does.
     #[inline]
     pub fn bump_r(&mut self) {

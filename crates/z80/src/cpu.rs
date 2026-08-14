@@ -130,6 +130,13 @@ impl Cpu {
         v
     }
 
+    /// The address of the operand byte most recently fetched — `PC` has already
+    /// moved past it — which is what stays on the address bus through any
+    /// internal cycles that follow the fetch.
+    fn operand_addr(&self) -> u16 {
+        self.regs.pc.wrapping_sub(1)
+    }
+
     pub(crate) fn fetch_word(&mut self, bus: &mut impl Bus) -> u16 {
         let lo = self.fetch_byte(bus);
         let hi = self.fetch_byte(bus);
@@ -153,6 +160,13 @@ impl Cpu {
     }
 
     // ---- Interrupts -------------------------------------------------------
+    //
+    // The wait states of an acknowledge are the one place `tick` is still the
+    // right call rather than `tick_at`. The cycle asserts `M1` and `IORQ`
+    // together, which is a combination no memory cycle produces and which the
+    // ULA does not arbitrate on, so nothing stalls the CPU here however the
+    // address bus happens to be sitting. The pushes that follow are ordinary
+    // write cycles and are contended like any other.
 
     fn leave_halt(&mut self) {
         if self.regs.halted {
@@ -223,7 +237,7 @@ impl Cpu {
             Index::Hl => self.regs.hl(),
             Index::Ix | Index::Iy => {
                 let d = self.fetch_byte(bus) as i8;
-                bus.tick(5);
+                bus.tick_at(self.operand_addr(), 5);
                 let base = self.regs.get16(index.reg16());
                 let addr = base.wrapping_add(d as u16);
                 self.regs.wz = addr;
@@ -278,7 +292,7 @@ impl Cpu {
     }
 
     fn jump_relative(&mut self, bus: &mut impl Bus, offset: i8) {
-        bus.tick(5);
+        bus.tick_at(self.operand_addr(), 5);
         let target = self.regs.pc.wrapping_add(offset as u16);
         self.regs.pc = target;
         self.regs.wz = target;
@@ -320,7 +334,7 @@ impl Cpu {
                 2 => {
                     // DJNZ d: the decrement costs one extra T-state on the
                     // opcode fetch, before the displacement is read.
-                    bus.tick(1);
+                    bus.tick_at(self.regs.ir(), 1);
                     let d = self.fetch_byte(bus) as i8;
                     self.regs.b = self.regs.b.wrapping_sub(1);
                     if self.regs.b != 0 {
@@ -345,7 +359,7 @@ impl Cpu {
                     self.regs.set16(self.rp(p, index), value);
                 } else {
                     // ADD HL,rp[p]
-                    bus.tick(7);
+                    bus.tick_at(self.regs.ir(), 7);
                     let target = index.reg16();
                     let lhs = self.regs.get16(target);
                     let rhs = self.regs.get16(self.rp(p, index));
@@ -356,7 +370,7 @@ impl Cpu {
             2 => self.execute_x0_z2(bus, index, p, q),
             3 => {
                 // INC/DEC rp[p]. No flags, two internal T-states.
-                bus.tick(2);
+                bus.tick_at(self.regs.ir(), 2);
                 let reg = self.rp(p, index);
                 let value = self.regs.get16(reg);
                 let result = if q == 0 {
@@ -375,7 +389,7 @@ impl Cpu {
                 };
                 let value = self.read_slot(bus, y, index, addr);
                 if y == 6 {
-                    bus.tick(1);
+                    bus.tick_at(addr, 1);
                 }
                 let result = if z == 4 {
                     self.regs.alu_inc(value)
@@ -391,7 +405,7 @@ impl Cpu {
                 if y == 6 && index.is_indexed() {
                     let d = self.fetch_byte(bus) as i8;
                     let n = self.fetch_byte(bus);
-                    bus.tick(2);
+                    bus.tick_at(self.operand_addr(), 2);
                     let addr = self.regs.get16(index.reg16()).wrapping_add(d as u16);
                     self.regs.wz = addr;
                     bus.write_cycle(addr, n);
@@ -458,8 +472,7 @@ impl Cpu {
                 let addr = self.fetch_word(bus);
                 let lo = bus.read_cycle(addr);
                 let hi = bus.read_cycle(addr.wrapping_add(1));
-                self.regs
-                    .set16(index.reg16(), u16::from_le_bytes([lo, hi]));
+                self.regs.set16(index.reg16(), u16::from_le_bytes([lo, hi]));
                 self.regs.wz = addr.wrapping_add(1);
             }
             _ => {
@@ -498,7 +511,7 @@ impl Cpu {
         match z {
             0 => {
                 // RET cc
-                bus.tick(1);
+                bus.tick_at(self.regs.ir(), 1);
                 if self.condition(y) {
                     let target = self.pop(bus);
                     self.regs.pc = target;
@@ -519,7 +532,8 @@ impl Cpu {
                         1 => self.regs.exx(),
                         2 => self.regs.pc = self.regs.get16(index.reg16()), // JP (HL)
                         _ => {
-                            bus.tick(2);
+                            // LD SP,HL
+                            bus.tick_at(self.regs.ir(), 2);
                             self.regs.sp = self.regs.get16(index.reg16());
                         }
                     }
@@ -563,12 +577,12 @@ impl Cpu {
                     let sp = self.regs.sp;
                     let lo = bus.read_cycle(sp);
                     let hi = bus.read_cycle(sp.wrapping_add(1));
-                    bus.tick(1);
+                    bus.tick_at(sp.wrapping_add(1), 1);
                     let old = self.regs.get16(index.reg16());
                     let [old_lo, old_hi] = old.to_le_bytes();
                     bus.write_cycle(sp.wrapping_add(1), old_hi);
                     bus.write_cycle(sp, old_lo);
-                    bus.tick(2);
+                    bus.tick_at(sp, 2);
                     let value = u16::from_le_bytes([lo, hi]);
                     self.regs.set16(index.reg16(), value);
                     self.regs.wz = value;
@@ -595,7 +609,7 @@ impl Cpu {
                 let target = self.fetch_word(bus);
                 self.regs.wz = target;
                 if self.condition(y) {
-                    bus.tick(1);
+                    bus.tick_at(self.operand_addr(), 1);
                     let pc = self.regs.pc;
                     self.push(bus, pc);
                     self.regs.pc = target;
@@ -603,14 +617,15 @@ impl Cpu {
             }
             5 => {
                 if q == 0 {
-                    bus.tick(1);
+                    // PUSH rp2[p]
+                    bus.tick_at(self.regs.ir(), 1);
                     let value = self.regs.get16(self.rp2(p, index));
                     self.push(bus, value);
                 } else {
                     match p {
                         0 => {
                             let target = self.fetch_word(bus);
-                            bus.tick(1);
+                            bus.tick_at(self.operand_addr(), 1);
                             let pc = self.regs.pc;
                             self.push(bus, pc);
                             self.regs.pc = target;
@@ -639,7 +654,7 @@ impl Cpu {
             }
             _ => {
                 // RST y*8
-                bus.tick(1);
+                bus.tick_at(self.regs.ir(), 1);
                 let pc = self.regs.pc;
                 self.push(bus, pc);
                 let target = u16::from(y) * 8;
@@ -652,12 +667,20 @@ impl Cpu {
     /// `rp[]` with the index prefix applied: `DD 21` is `LD IX,nn`.
     fn rp(&self, p: u8, index: Index) -> Reg16 {
         let base = RP_TABLE[p as usize];
-        if base == Reg16::Hl { index.reg16() } else { base }
+        if base == Reg16::Hl {
+            index.reg16()
+        } else {
+            base
+        }
     }
 
     fn rp2(&self, p: u8, index: Index) -> Reg16 {
         let base = RP2_TABLE[p as usize];
-        if base == Reg16::Hl { index.reg16() } else { base }
+        if base == Reg16::Hl {
+            index.reg16()
+        } else {
+            base
+        }
     }
 
     // Prefixed groups live in their own modules; these are the entry points.
@@ -670,7 +693,7 @@ impl Cpu {
             let base = self.regs.get16(index.reg16());
             self.regs.wz = base.wrapping_add(d as u16);
             let op = self.fetch_byte(bus);
-            bus.tick(2);
+            bus.tick_at(self.operand_addr(), 2);
             op
         } else {
             self.fetch_opcode(bus)

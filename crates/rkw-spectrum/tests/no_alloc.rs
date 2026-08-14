@@ -242,6 +242,61 @@ fn the_slice_loop_loading_and_saving_a_tape_does_not_allocate() {
 /// keys held is what happens at that end. Fixed arrays throughout, which is
 /// what [`rkw_spectrum::keymap::MAX_HELD`] exists for; this is the assertion
 /// that says so.
+/// Contention runs several times per instruction and the floating bus runs on
+/// every `IN` from an unattached port. Neither has any business touching the
+/// heap, and both are new enough that nothing else here reaches them: STRIPES
+/// writes to the contended bank but never reads a port that floats.
+#[test]
+fn contention_and_the_floating_bus_do_not_allocate() {
+    // Code and data both in the contended bank, and an odd port nothing
+    // answers, so every machine cycle is contended and every IN goes through
+    // the floating bus. E accumulates the AND of everything read back, so that
+    // the run can prove it saw a fetched byte and not only an idle one.
+    #[rustfmt::skip]
+    const SPINNING: &[u8] = &[
+        0x21, 0x00, 0x41,  // ld hl,$4100
+        0x01, 0xFF, 0x00,  // ld bc,$00ff
+        0x1E, 0xFF,        // ld e,$ff
+        0x34,              // loop: inc (hl)
+        0xED, 0x78,        //       in a,(c)
+        0xA3,              //       and e
+        0x5F,              //       ld e,a
+        0x23,              //       inc hl
+        0x18, 0xF8,        //       jr loop
+    ];
+
+    let mut machine = Spectrum::new();
+    machine.memory.load(0x4000, SPINNING);
+    let mut cpu = Cpu::new();
+    cpu.regs.pc = 0x4000;
+    cpu.regs.sp = 0xFF00;
+
+    let (_, allocations) = alloc_check::count(Framebuffer::new);
+    assert!(
+        allocations > 0,
+        "allocating a framebuffer allocated nothing, so the counting allocator \
+         is not installed and this test proves nothing"
+    );
+
+    let (_, allocations) = alloc_check::count(|| {
+        for _ in 0..200_000 {
+            cpu.step(&mut machine);
+        }
+    });
+    assert_eq!(
+        allocations, 0,
+        "a contended run allocated {allocations} times"
+    );
+
+    // The run did what it was supposed to: it spent most of its time inside
+    // the display, so the arithmetic ran rather than short-circuiting.
+    assert!(machine.t_states() > 3 * rkw_spectrum::T_STATES_PER_FRAME);
+    assert_ne!(
+        cpu.regs.e, 0xFF,
+        "the floating bus never returned a fetched byte"
+    );
+}
+
 #[test]
 fn turning_host_key_events_into_a_matrix_does_not_allocate() {
     let mut host = HostKeys::new();

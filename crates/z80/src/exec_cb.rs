@@ -47,8 +47,9 @@ impl Cpu {
             // BIT. No write-back, and the indexed and (HL) forms take their
             // undocumented flag bits from WZ rather than from a register.
             if use_memory {
-                bus.tick(1);
-                self.regs.alu_bit_indirect(y, value, (self.regs.wz >> 8) as u8);
+                bus.tick_at(addr, 1);
+                self.regs
+                    .alu_bit_indirect(y, value, (self.regs.wz >> 8) as u8);
             } else {
                 self.regs.alu_bit(y, value);
             }
@@ -71,7 +72,7 @@ impl Cpu {
         };
 
         if use_memory {
-            bus.tick(1);
+            bus.tick_at(addr, 1);
             bus.write_cycle(addr, result);
             // The undocumented copy: DD CB d 06 (z == 6) is the documented
             // form and writes nowhere else.

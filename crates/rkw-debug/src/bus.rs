@@ -11,11 +11,11 @@
 //! friends, and a decorator that only overrode the raw `read` would silently
 //! route around it, taking the contention with it.
 
-use z80::disasm::Peek;
 use z80::Bus;
+use z80::disasm::Peek;
 
-use crate::breakpoints::{Access, Breakpoints, PortAccess};
 use crate::StopReason;
+use crate::breakpoints::{Access, Breakpoints, PortAccess};
 
 pub(crate) struct DebugBus<'a, B: Bus + Peek> {
     inner: &'a mut B,
@@ -105,6 +105,10 @@ impl<B: Bus + Peek> Bus for DebugBus<'_, B> {
 
     fn tick(&mut self, t: u32) {
         self.inner.tick(t);
+    }
+
+    fn tick_at(&mut self, addr: u16, t: u32) {
+        self.inner.tick_at(addr, t);
     }
 
     /// Not a watched read. An instruction fetch is execution, and execution is
