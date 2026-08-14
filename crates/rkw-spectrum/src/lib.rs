@@ -40,7 +40,11 @@
 //!   `0xFE`.
 //! - [`spectrum`] wires them to the CPU's bus and to the emulation thread's
 //!   [`Machine`](rkw_debug::Machine).
+//! - [`audio`] wraps that in a machine that also makes a noise, which is where
+//!   the beeper's per-frame work runs without becoming machine state
+//!   (ADR-0021).
 
+pub mod audio;
 pub mod frame;
 pub mod keyboard;
 pub mod keymap;
@@ -49,7 +53,10 @@ pub mod screen;
 pub mod spectrum;
 pub mod ula;
 
-pub use frame::{HEIGHT, LINES_PER_FRAME, T_STATES_PER_FRAME, T_STATES_PER_LINE, WIDTH, line_of};
+pub use audio::AudioMachine;
+pub use frame::{
+    CLOCK_HZ, HEIGHT, LINES_PER_FRAME, T_STATES_PER_FRAME, T_STATES_PER_LINE, WIDTH, line_of,
+};
 pub use keyboard::{Key, Keyboard};
 pub use keymap::{HostKey, HostKeys, KeyMap};
 pub use memory::{Memory, RomTooLarge, SCREEN_BASE};

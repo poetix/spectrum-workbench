@@ -177,6 +177,37 @@ a dev-dependency of nothing that ships.
 The first user is the disassembler's decode path (ticket 0007). The trace ring
 and the emulation thread proper are the ones it exists for.
 
+## What the beeper costs, and what its latency budget is
+
+Sound is made once a frame, on the emulation thread, inside the same
+`service_event` that ends the frame. A frame is 69,888 T-states, which at
+48 kHz is 958.464 output samples and — at four windows per sample — 3,834
+windows. Each window is a few arithmetic operations over an edge list of a few
+hundred entries; each output sample is a 133-tap dot product and three small
+IIR filters. Call it a quarter of a million floating-point operations per
+frame, against 20 ms of wall clock in which a real machine would have retired
+about 8,600 instructions.
+
+That figure is a ratio and not a measurement, and it has to stay one. Adding
+audio means a second `Machine` monomorphisation — `Emu<AudioMachine>` alongside
+`Emu<Spectrum>` — and the caution in "What the slice loop turned out to cost"
+applies with full force: the two must be measured inside the same binary or the
+difference is code layout rather than work.
+
+The latency comes in two lumps that add up. The machine makes sound in 20 ms
+frames, so the granularity is a frame however small the device's buffer is; and
+the ring wants enough depth that a late frame does not run it dry. A ring of
+4096 samples is 85 ms at 48 kHz and 8192 is 171 ms; a target depth of two or
+three frames — 40 to 60 ms — is the number to aim the pacing at, which is well
+inside what a person notices on a keypress and well outside what a scheduling
+hiccup can eat.
+
+Being full is the normal state, not the exceptional one. The core runs at about
+360× real time, so how full the ring is *is* how far ahead of the speaker the
+machine has got, and that is the signal the front end should pace on (ADR-0021,
+ticket 0019). An emulator paced by its audio buffer needs no other clock and
+never has to correct for drift.
+
 ## Performance builds
 
 `[profile.release]` uses fat LTO and a single codegen unit. An interpreter is

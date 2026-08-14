@@ -17,6 +17,10 @@ matrix, which between them are enough that **the real 48K ROM boots to a BASIC
 prompt and a program can be typed in and run**. There is no sound and no tape
 yet, and no window: the picture comes out as a framebuffer, and the only front
 end is the debugger.
+and listings, and a gdb-style REPL that assembles a file and runs it. The first
+hardware is there: the 48K memory map, the screen, the frame interrupt, the
+keyboard matrix and the beeper. There is no tape yet, nothing opens an audio
+device or a window, and nothing has booted a ROM.
 
 ## What works
 
@@ -199,6 +203,31 @@ on `10>PRINT "hello"` rather than on forty thousand pixels. What that cannot
 see — the pixels within a cell, the attributes, the border — is covered by a
 pinned hash of the framebuffer. Nothing in the machine is seeded by the host, so
 the boot is deterministic down to the T-state.
+### The beeper
+
+The speaker is one bit of the same port, and it is entirely a matter of timing:
+a level held is silent, and a program plays a note by flipping the bit at the
+right rate. So the machine records *when* the bit moved and nothing else, and
+`rkw-audio` — a crate that has never heard of a `Spectrum`
+([ADR-0021](adr/0021-edges-in-the-machine-and-sound-outside-it.md)) — turns
+that into sound.
+
+An output sample is not a reading of the speaker but the exact average over the
+window it covers, taken four times faster than the device runs and filtered on
+the way down, which is what keeps beeper music from aliasing into the grinding
+whistle that emulators used to make of it: a 7 kHz square wave's images come
+back 84 dB down rather than the 17 dB that point-sampling the bit would give.
+Then it goes through the speaker — a small paper cone with no bass, a hard
+resonance at 2.5 kHz and nothing above 5, which is most of what makes a
+Spectrum sound like a Spectrum and not like a signal generator.
+
+The sample rate, the filters and the volume are all outside the machine, which
+ADR-0017 requires and a crate boundary enforces. To hear it before the front
+end exists:
+
+```sh
+cargo run --example beep -p rkw-spectrum -- --seconds 2 --speaker piezo
+```
 
 ### Driving it
 
@@ -295,10 +324,11 @@ matrix all reporting for duty at once.
 ```text
 crates/
   rkw-asm/        macro assembler: complete
+  rkw-audio/      the beeper: speaker edges, resampling, the speaker model
   rkw-cli/        rkwdbg: the terminal front end
   rkw-dbginfo/    the debug info format, and source resolution over it
   rkw-debug/      debugger core, emulation thread, command layer
-  rkw-spectrum/   the 48K machine: memory map, ULA, screen
+  rkw-spectrum/   the 48K machine: memory map, ULA, screen, sound
   z80/            CPU core and disassembler
 adr/              architecture decision records
 docs/
@@ -314,6 +344,8 @@ scripts/
 
 Planned: `rkw-dap` (Debug Adapter Protocol front end), `rkw-gui`. Tape and sound
 join `rkw-spectrum`.
+Planned: `rkw-dap` (Debug Adapter Protocol front end), `rkw-gui`. Tape joins
+`rkw-spectrum`.
 
 ## Design
 

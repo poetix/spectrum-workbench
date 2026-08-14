@@ -21,6 +21,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rkw-audio"
+version = "0.1.0"
+
+[[package]]
 name = "rkw-cli"
 version = "0.1.0"
 dependencies = [
@@ -50,6 +54,7 @@ name = "rkw-spectrum"
 version = "0.1.0"
 dependencies = [
  "alloc-check",
+ "rkw-audio",
  "rkw-debug",
  "z80",
 ]
