@@ -12,15 +12,12 @@ the assembler is finished: it turns source into Z80 machine code that runs on
 it, with macros, conditional assembly, a listing and debug information. The
 debugger works — breakpoints, watchpoints, stepping, source-level breakpoints
 and listings, and a gdb-style REPL that assembles a file and runs it. The
-hardware is the 48K memory map, the screen, the frame interrupt and the keyboard
-matrix, which between them are enough that **the real 48K ROM boots to a BASIC
-prompt and a program can be typed in and run**. There is no sound and no tape
-yet, and no window: the picture comes out as a framebuffer, and the only front
-end is the debugger.
-and listings, and a gdb-style REPL that assembles a file and runs it. The first
-hardware is there: the 48K memory map, the screen, the frame interrupt, the
-keyboard matrix and the beeper. There is no tape yet, nothing opens an audio
-device or a window, and nothing has booted a ROM.
+hardware is the 48K memory map, the screen, the frame interrupt, the keyboard
+matrix, the beeper and the tape, which between them are enough that **the real
+48K ROM boots to a BASIC prompt, a program can be typed in and run, and
+`LOAD ""` reads a tape image off the waveform**. There is no window and nothing
+opens an audio device: the picture comes out as a framebuffer, the sound comes
+out as a sample ring, and the only front end is the debugger.
 
 ## What works
 
@@ -229,6 +226,43 @@ end exists:
 cargo run --example beep -p rkw-spectrum -- --seconds 2 --speaker piezo
 ```
 
+### The tape
+
+A tape is an audio signal too, and the machine's whole view of it is one bit —
+`EAR`, which the loading routine polls in a loop and times. So a `.tap` file is
+played rather than parsed into the machine: pilot, sync, two pulses a bit, and
+the loader that runs is the program's own
+([ADR-0022](adr/0022-the-tape-is-a-waveform-and-lives-in-the-machine.md)). That
+is what makes custom loaders possible, which is most of the commercial
+catalogue and none of what a trap on the ROM routine would give.
+
+Edges reach the machine as scheduled events, so a running tape costs a stop in
+the slice loop every few hundred T-states and nothing per instruction. The deck
+is machine state — position, level and next edge — because the loader's own
+timing depends on it, and a checkpoint restored without it would resume into a
+measurement of a waveform that is no longer playing.
+
+Saving is the same thing backwards, and is *not* machine state: the `MIC` bit's
+edges are already in the log the beeper drains, so `Saving<M>` wraps a machine,
+reads them once a frame and decodes them back into blocks. A block that lost
+bytes is discarded and counted rather than written out short, because a
+truncated block in a TAP file is a tape that looks fine until it is loaded.
+
+The ROM checks all of it. With a ROM image present the tests call the real
+`LD-BYTES` at a played tape, type `LOAD ""` at the BASIC prompt, and record
+what `SA-BYTES` writes — then mount that and load it back.
+
+```rust
+let tap = Tap::parse(&std::fs::read("game.tap")?)?;
+machine.mount_tape(Arc::new(tap));
+machine.play_tape();
+```
+
+A trapped loader is there as well, as a function a front end can call when the
+program counter reaches `LD-BYTES`: it puts the block in memory and returns in
+the same T-state. It is a convenience over the waveform rather than an
+alternative to it.
+
 ### Driving it
 
 `rkwdbg` is the terminal front end: it assembles a source file, loads it, and
@@ -328,7 +362,8 @@ crates/
   rkw-cli/        rkwdbg: the terminal front end
   rkw-dbginfo/    the debug info format, and source resolution over it
   rkw-debug/      debugger core, emulation thread, command layer
-  rkw-spectrum/   the 48K machine: memory map, ULA, screen, sound
+  rkw-spectrum/   the 48K machine: memory map, ULA, screen, sound, tape deck
+  rkw-tape/       TAP blocks, the waveform they stand for, and the way back
   z80/            CPU core and disassembler
 adr/              architecture decision records
 docs/
@@ -342,10 +377,7 @@ scripts/
   fetch-rom.sh
 ```
 
-Planned: `rkw-dap` (Debug Adapter Protocol front end), `rkw-gui`. Tape and sound
-join `rkw-spectrum`.
-Planned: `rkw-dap` (Debug Adapter Protocol front end), `rkw-gui`. Tape joins
-`rkw-spectrum`.
+Planned: `rkw-dap` (Debug Adapter Protocol front end), `rkw-gui`.
 
 ## Design
 

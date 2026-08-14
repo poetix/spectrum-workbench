@@ -18,12 +18,15 @@
 //! most fifty times a second. What must not happen is for it to allocate 104 KB
 //! per frame when handed a buffer to reuse.
 
+use std::sync::Arc;
+
 use rkw_audio::ring;
 use rkw_debug::Debugger;
 use rkw_debug::command::Command;
 use rkw_debug::emu::{Config, Emu, RunState};
 use rkw_spectrum::keymap::{HostKey, HostKeys, KeyMap};
-use rkw_spectrum::{AudioMachine, Flash, Framebuffer, SCREEN_BASE, Spectrum};
+use rkw_spectrum::{AudioMachine, Flash, Framebuffer, SCREEN_BASE, Saving, Spectrum};
+use rkw_tape::Tap;
 use z80::Cpu;
 
 #[global_allocator]
@@ -169,6 +172,68 @@ fn the_slice_loop_making_sound_does_not_allocate() {
     assert!(
         emu.machine.fill() > 0.0,
         "nothing reached the ring, so the beeper was never exercised"
+    );
+}
+
+#[test]
+fn the_slice_loop_loading_and_saving_a_tape_does_not_allocate() {
+    // A tape running turns `service_event` from a fifty-times-a-second thing
+    // into a two-thousand-times-a-second one, and every one of those calls
+    // pulls a pulse out of the player. The recorder is the other half: STRIPES
+    // moves bit 3 along with the rest of the accumulator, so the `MIC` path is
+    // fed as well.
+    //
+    // The tape is mounted outside the measured region on purpose — reading a
+    // file and parsing it allocates, which is why it happens at the rate a
+    // person mounts tapes and not on the emulation thread.
+    let (cpu, mut spectrum) = machine();
+    let tap = Tap::builder().block(0xFF, &[0x5A; 512]).build();
+    spectrum.mount_tape(Arc::new(tap));
+    spectrum.play_tape();
+    let machine = Saving::new(spectrum);
+
+    let (_, allocations) = alloc_check::count(Framebuffer::new);
+    assert!(
+        allocations > 0,
+        "allocating a framebuffer allocated nothing, so the counting allocator \
+         is not installed and this test proves nothing"
+    );
+
+    let (mut emu, mut handle) = Emu::new(
+        cpu,
+        machine,
+        Debugger::new(),
+        Config {
+            event_capacity: 16,
+            command_capacity: 16,
+            control_interval: 224,
+            log_capacity: 0,
+        },
+    );
+    handle.send(Command::Resume).unwrap();
+
+    const SLICES: usize = 2_000;
+    let (_, allocations) = alloc_check::count(|| {
+        for _ in 0..SLICES {
+            assert_eq!(emu.slice(), RunState::Running);
+        }
+    });
+    assert_eq!(
+        allocations, 0,
+        "{SLICES} slices with a tape running allocated {allocations} times"
+    );
+
+    // The run did what it was supposed to: the tape moved, the machine saw the
+    // edges, and the recorder was fed.
+    let spectrum: &Spectrum = emu.machine.as_ref();
+    assert!(spectrum.ula.frames() >= 6);
+    assert!(
+        spectrum.tape.is_playing(),
+        "the tape stopped, so most of these slices had no pulses in them"
+    );
+    assert!(
+        !spectrum.ula.audio().frame().0.is_empty(),
+        "no port writes were logged, so the recorder was never fed"
     );
 }
 

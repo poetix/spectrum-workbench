@@ -26,6 +26,11 @@
 //! [`GAP_FRAMES`], and the gap matters as much as the hold because the ROM
 //! ignores a key that has not been let go of since the last one.
 
+// This module is compiled into each test binary that includes it, and no one
+// of them uses all of it: the boot tests hash a framebuffer and never call a
+// ROM routine, and the tape tests do the opposite.
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -114,19 +119,10 @@ impl Board {
         }
     }
 
-    /// Run until the clock reaches `target`, servicing frame interrupts on the
+    /// Run until the clock reaches `target`, servicing hardware events on the
     /// way.
     pub fn run_to(&mut self, target: u64) {
-        while self.machine.t_states() < target {
-            let event = self.machine.next_event().expect("the ULA schedules frames");
-            let deadline = event.min(target);
-            while self.machine.t_states() < deadline {
-                self.cpu.step(&mut self.machine);
-            }
-            if self.machine.t_states() >= event {
-                self.machine.service_event();
-            }
-        }
+        run_to(&mut self.cpu, &mut self.machine, target);
     }
 
     /// Run for `frames` frames.
@@ -216,6 +212,47 @@ impl Board {
         }
         font
     }
+}
+
+/// The slice loop, in the smallest form that is still one: run to the
+/// deadline, service whatever was due there, repeat.
+///
+/// Free rather than a method on [`Board`] because the tape tests wrap the
+/// machine in a [`Saving`](rkw_spectrum::Saving) before running it, and a
+/// second copy of this loop in those tests would be a second place for the
+/// event handling to be subtly different.
+pub fn run_to<M: Machine>(cpu: &mut Cpu, machine: &mut M, target: u64) {
+    while machine.t_states() < target {
+        let event = machine.next_event().expect("the ULA schedules frames");
+        let deadline = event.min(target);
+        while machine.t_states() < deadline {
+            cpu.step(machine);
+        }
+        if machine.t_states() >= event {
+            machine.service_event();
+        }
+    }
+}
+
+/// Run until `pc` is about to be executed, or until `limit` T-states have
+/// passed. True if it got there.
+///
+/// One instruction at a time, because what it is watching for is a subroutine
+/// return landing on a sentinel — which is how a test calls a ROM routine and
+/// knows it has finished.
+pub fn run_until_pc<M: Machine>(cpu: &mut Cpu, machine: &mut M, pc: u16, limit: u64) -> bool {
+    let deadline = machine.t_states() + limit;
+    while machine.t_states() < deadline {
+        if cpu.regs.pc == pc {
+            return true;
+        }
+        let event = machine.next_event().expect("the ULA schedules frames");
+        cpu.step(machine);
+        if machine.t_states() >= event {
+            machine.service_event();
+        }
+    }
+    false
 }
 
 /// The Spectrum's character set is ASCII up to `0x7F`, where `©` sits in place

@@ -17,6 +17,11 @@ rkw-audio = { path = "../rkw-audio" }
 # the slice loop asks about, and the debugger cannot be made to know about
 # hardware it is meant to outlive.
 rkw-debug = { path = "../rkw-debug" }
+# TAP blocks and the waveform they stand for. Points this way for the same
+# reason rkw-audio does: the machine is what has a tape deck in it, and a crate
+# that cannot name a `Spectrum` cannot end up holding a piece of one
+# (ADR-0022).
+rkw-tape = { path = "../rkw-tape" }
 z80 = { path = "../z80" }
 
 [dev-dependencies]

@@ -15,12 +15,16 @@
 //! **The floating bus.** A read of an unattached port returns `0xFF` rather
 //! than the byte the ULA happens to be fetching, which is the same ticket.
 
+use std::sync::Arc;
+
 use rkw_debug::machine::{Clock, Machine};
+use rkw_tape::Tap;
 use z80::Bus;
 use z80::disasm::Peek;
 
 use crate::memory::{Memory, RomTooLarge, SCREEN_BASE};
 use crate::screen::{Flash, Framebuffer};
+use crate::tape::Tape;
 use crate::ula::Ula;
 
 /// A 48K Spectrum.
@@ -28,6 +32,10 @@ use crate::ula::Ula;
 pub struct Spectrum {
     pub memory: Memory,
     pub ula: Ula,
+    /// The tape deck, which is machine state because the loader's timing
+    /// depends on it (ADR-0022). Empty and stopped on a machine nobody has put
+    /// a tape into, and free until then.
+    pub tape: Tape,
     /// T-states since the machine was made. Never reset: the debugger's
     /// deadlines and the ULA's frame clock are both absolute (ADR-0007).
     t: u64,
@@ -46,6 +54,7 @@ impl Spectrum {
         Spectrum {
             memory: Memory::new(),
             ula: Ula::new(),
+            tape: Tape::new(),
             t: 0,
         }
     }
@@ -59,6 +68,35 @@ impl Spectrum {
 
     pub fn t_states(&self) -> u64 {
         self.t
+    }
+
+    /// Put a tape in the deck, rewound and stopped.
+    pub fn mount_tape(&mut self, tap: Arc<Tap>) {
+        self.tape.mount(tap);
+    }
+
+    /// Start the tape from where the head is. The first pulse begins now, so a
+    /// program that is already in its loading loop sees the pilot immediately.
+    pub fn play_tape(&mut self) {
+        self.tape.play(self.t);
+        self.ula.set_ear(self.tape.level());
+    }
+
+    /// Stop the tape and let the `EAR` line go back to idle.
+    pub fn stop_tape(&mut self) {
+        self.tape.stop();
+        self.ula.set_ear(self.tape.level());
+    }
+
+    /// True when the clock has reached the end of the frame in progress.
+    ///
+    /// [`Machine::service_event`] is called for tape edges as well as for the
+    /// frame interrupt, so anything that does per-frame work from inside one —
+    /// the beeper of ADR-0021, the tape recorder of ADR-0022 — has to ask
+    /// which of the two it was woken for. Doing that work on a tape edge would
+    /// run it thousands of times a frame over a log that has barely changed.
+    pub fn frame_due(&self) -> bool {
+        self.t >= self.ula.next_interrupt()
     }
 
     /// Paint the last complete frame: the screen at `0x4000` as it stands now,
@@ -147,6 +185,21 @@ impl Peek for Spectrum {
     }
 }
 
+/// The bottom of the wrapper stack: a `Spectrum` is the machine a
+/// [`Saving`](crate::save::Saving) or an [`AudioMachine`](crate::AudioMachine)
+/// is looking for, and so is itself.
+impl AsRef<Spectrum> for Spectrum {
+    fn as_ref(&self) -> &Spectrum {
+        self
+    }
+}
+
+impl AsMut<Spectrum> for Spectrum {
+    fn as_mut(&mut self) -> &mut Spectrum {
+        self
+    }
+}
+
 impl Clock for Spectrum {
     fn t_states(&self) -> u64 {
         self.t
@@ -154,13 +207,28 @@ impl Clock for Spectrum {
 }
 
 impl Machine for Spectrum {
-    /// The next frame interrupt. The tape will schedule edges here too (0016),
-    /// at which point this becomes the earlier of the two.
+    /// The earlier of the next frame interrupt and the next tape edge.
+    ///
+    /// A running tape puts an event here every few hundred T-states, which is
+    /// finer than the control tick and is what a loader's own timing is made
+    /// of. A stopped one costs a branch.
     fn next_event(&self) -> Option<u64> {
-        Some(self.ula.next_interrupt())
+        let interrupt = self.ula.next_interrupt();
+        Some(match self.tape.next_edge() {
+            Some(edge) => edge.min(interrupt),
+            None => interrupt,
+        })
     }
 
+    /// Whichever of the two was due — and both, when a single step has carried
+    /// the clock past a frame boundary and a pulse at once.
     fn service_event(&mut self) {
-        self.ula.end_frame();
+        if self.tape.next_edge().is_some_and(|edge| self.t >= edge) {
+            let level = self.tape.advance_to(self.t);
+            self.ula.set_ear(level);
+        }
+        if self.frame_due() {
+            self.ula.end_frame();
+        }
     }
 }

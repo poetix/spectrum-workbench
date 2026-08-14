@@ -23,8 +23,8 @@
 //!
 //! # The order matters, and is the whole reason the edge log is single-buffered
 //!
-//! [`Ula::end_frame`] rolls the edge log on. So the sound has to be made
-//! *before* it is called, and because it is, there is never a second reader of
+//! [`Ula::end_frame`](crate::Ula::end_frame) rolls the edge log on. So the
+//! sound has to be made *before* it is called, and because it is, there is never a second reader of
 //! that log on another thread — which is why it needs no second buffer, unlike
 //! the border. Getting this backwards would produce silence, not corruption,
 //! which is the kind of bug that survives a long time; hence the test.
@@ -174,6 +174,20 @@ impl Peek for AudioMachine {
     }
 }
 
+/// How a wrapper outside this one reaches the machine — the tape recorder of
+/// ticket 0016 is one, and it needs the ULA's edge log and the frame boundary.
+impl AsRef<Spectrum> for AudioMachine {
+    fn as_ref(&self) -> &Spectrum {
+        &self.spectrum
+    }
+}
+
+impl AsMut<Spectrum> for AudioMachine {
+    fn as_mut(&mut self) -> &mut Spectrum {
+        &mut self.spectrum
+    }
+}
+
 impl Clock for AudioMachine {
     fn t_states(&self) -> u64 {
         self.spectrum.t_states()
@@ -187,9 +201,16 @@ impl Machine for AudioMachine {
 
     /// Make the frame's sound, then end the frame — in that order, because
     /// ending it rolls the edge log on.
+    ///
+    /// Only when the frame is what came due. Since ticket 0016 a tape edge is
+    /// a scheduled event as well, and it arrives every few hundred T-states
+    /// while a tape is running; rendering the frame's sound at each one would
+    /// produce a frame's worth of samples per pulse.
     fn service_event(&mut self) {
-        let (edges, start) = self.spectrum.ula.audio().frame();
-        self.beeper.render_into(edges, start, &mut self.out);
+        if self.spectrum.frame_due() {
+            let (edges, start) = self.spectrum.ula.audio().frame();
+            self.beeper.render_into(edges, start, &mut self.out);
+        }
         self.spectrum.service_event();
     }
 }
