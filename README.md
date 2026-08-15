@@ -46,17 +46,67 @@ quirks can be.
 | Fuse Z80 test suite | 1331 / 1335, four documented divergences |
 | `zexdoc` | all 67 groups pass |
 | `zexall` (undocumented flags included) | all 67 groups pass |
+| raxoft `z80test`: `z80full`, `z80doc`, `z80flags`, `z80docflags` | 160 / 160 |
+| raxoft `z80test`: `z80ccf`, `z80memptr` | 160 / 160 |
 
-The Fuse suite is the more interesting of the two, because it records the time
-at which every bus cycle completed. That checks *where* each machine cycle sits
-inside an instruction, not merely how many there are — which is exactly the
-property contention depends on.
+The Fuse suite records the time at which every bus cycle completed. That checks
+*where* each machine cycle sits inside an instruction, not merely how many there
+are — which is exactly the property contention depends on.
+
+`z80test` is the only one of them whose expected values were measured on
+real hardware rather than produced by another emulator, and it is run the way a
+person would run it: boot the ROM, mount the tape, type `LOAD ""`, and read the
+result off the screen ([ADR-0024](adr/0024-run-z80test-as-a-program-not-as-a-data-table.md)).
+`z80ccf` is what validates the `Q` latch of ADR-0003 — it puts a `CCF` after
+every instruction in the set and CRCs the flags — and `z80memptr` does the same
+with `BIT n,(HL)` for `WZ`. All seven suites run in six seconds of wall clock,
+which is about seven hours of emulated Spectrum.
 
 The four divergences are all `BIT n,(HL)`. That suite predates the discovery of
 MEMPTR and expects the undocumented flags to come from the byte read out of
 memory; the researched behaviour takes them from `WZ`, which the instruction
 does not itself set, so the correct answer depends on state the test files do
 not specify. See the note in `crates/z80/tests/fuse.rs`.
+
+### The awkward corners
+
+Some of the Z80's behaviour is not in the manual, and some of it is not in the
+CPU at all.
+
+**Block instructions that repeat.** `LDIR` and its family spend an extra machine
+cycle putting `PC` back when they are going round again, and the CPU rewrites
+flags during it: bits 5 and 3 come from the address it is returning to rather
+than from anything it moved, and the I/O forms recompute `H` and `P/V` from the
+transferred byte with `B` adjusted one further. This is David Banks' 2018 work;
+`z80test` reaches it by having the instruction overwrite its own second byte so
+that the repeat turns it into a `NOP`, which is the only way to see the
+repeating iteration's flags without an interrupt. `CPIR`, `CPDR`, `OTIR` and
+`OTDR` are not reachable that way and are covered by hand in
+`crates/z80/tests/block_flags.rs`.
+
+**`LD A,I` and `LD A,R`.** These copy `IFF2` into `P/V`, which is the only way to
+read the interrupt state back. On an NMOS Z80, an interrupt accepted at the end
+of one of them clears `IFF2` before the copy has settled, so the flag reads 0 —
+and code that tests it to decide whether to re-enable interrupts gets it wrong,
+on hardware and now here.
+
+**`RETN` and `RETI`.** If they find `IFF1` and `IFF2` disagreeing — which only an
+NMI can arrange — the boundary after them is not an interrupt sampling point.
+Without it, an NMI handler's return could be pre-empted before the instruction
+it returned to had run.
+
+**Where `INT` is sampled.** At instruction boundaries, and the Z80 reads the line
+during the *last* T-state of the instruction rather than after it, so the ULA is
+asked whether the line was down one T-state ago. What can be interrupted is
+exactly what the core treats as one step: a `DD CB d op` is four bytes and one
+step, an invalid `ED xx` is two bytes and one step, and a repeating `LDIR` is one
+step per iteration with `PC` back on the `ED`.
+
+**The `EAR` line is not idle-high.** Bit 6 of a port `0xFE` read comes back as the
+speaker bit of the last write, because the output is wired into the input. This
+is what `z80test` checks before it will run its nine `IN` groups, and getting it
+wrong is worth nine failures in every suite — a fact about the ULA that a CPU
+test found.
 
 ### The assembler
 
@@ -483,11 +533,15 @@ Then:
 ```sh
 cargo test --test fuse
 cargo test --release --test zex -- --ignored --nocapture
+cargo test -p rkw-spectrum --test z80test -- --ignored --nocapture
 ```
 
 The exercisers run for billions of T-states — around 40 seconds each in a
 release build — so they are marked `#[ignore]`. The tests that need this data
 skip with a message when it is absent, so `cargo test` works on a fresh clone.
+
+`z80test` also needs the ROM (below), because it is a Spectrum program and is
+run as one. All seven suites together take about six seconds.
 
 ## The ROM
 
@@ -529,6 +583,8 @@ above and is not distributed with this repository:
 
 - the Fuse Z80 test suite, from the Fuse emulator (GPL-2.0-or-later)
 - `zexdoc` and `zexall`, Frank Cringle's instruction exerciser (GPL-2.0)
+- raxoft's `z80test` tapes (MIT), from the project's release archive — the
+  repository itself carries only the sjasmplus sources
 
 `scripts/fetch-rom.sh` downloads the 48K ZX Spectrum ROM, which is Amstrad's
 copyright and likewise not distributed here. It is a test input: nothing in this

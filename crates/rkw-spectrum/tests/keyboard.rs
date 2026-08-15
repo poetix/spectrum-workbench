@@ -217,7 +217,7 @@ fn what_the_host_holds_is_what_the_program_reads() {
 fn the_ear_bit_is_read_alongside_the_keyboard() {
     let mut machine = Spectrum::new();
     machine.ula.keyboard.press(Key::Enter);
-    machine.ula.set_ear(false);
+    machine.ula.set_ear(Some(false));
 
     let rows = scan(machine.ula.keyboard);
     assert_eq!(rows[Key::Enter.half_row()], 0xFE, "a fresh machine's EAR");
@@ -228,7 +228,7 @@ fn the_ear_bit_is_read_alongside_the_keyboard() {
         .ula
         .read_port_fe(half_row_port(Key::Enter.half_row()));
     assert_eq!(value, 0xBE);
-    machine.ula.set_ear(true);
+    machine.ula.set_ear(Some(true));
     assert_eq!(
         machine
             .ula

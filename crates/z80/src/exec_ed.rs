@@ -42,10 +42,16 @@ impl Cpu {
         match x {
             1 => self.execute_ed_x1(bus, y, z, p, q),
             2 if z <= 3 && y >= 4 => self.execute_block(bus, y - 4, z),
-            // Everything else in the ED page is a two-byte NOP. On real
-            // silicon these are "NONI" — they suppress interrupt sampling for
-            // the next instruction — which matters only for exotic timing
-            // tricks and is not modelled yet.
+            // Everything else in the ED page does nothing, in eight T-states
+            // and two bytes — both of which the caller has already spent.
+            //
+            // The decoding tables write these as "NONI followed by NOP", where
+            // NONI is an invented mnemonic for "no operation, and no interrupt
+            // after this one". What that suppresses is an interrupt between the
+            // `ED` and the byte after it, not one after the pair; and because
+            // this core takes the pair as a single `Cpu::step`, there is no
+            // point at which one could be taken. Nothing to do here, and
+            // nothing missing.
             _ => {}
         }
     }
@@ -101,6 +107,14 @@ impl Cpu {
             5 => {
                 // RETN and RETI. Both restore IFF1 from IFF2; they differ only
                 // in the bus signalling, which nothing here observes.
+                //
+                // If the two disagreed on the way in — which only an NMI
+                // accepted mid-program can arrange — the maskable interrupt is
+                // not accepted on the instruction boundary that follows. Andre
+                // Weissflog found this in 2021; it is what stops an NMI handler
+                // that returns with `RETN` from being interrupted before the
+                // instruction it returned to has had a chance to run.
+                self.iff_restored = self.regs.iff1 != self.regs.iff2;
                 self.regs.iff1 = self.regs.iff2;
                 let target = self.pop(bus);
                 self.regs.pc = target;
@@ -127,6 +141,7 @@ impl Cpu {
                 bus.tick_at(self.regs.ir(), 1);
                 let value = if y == 2 { self.regs.i } else { self.regs.r };
                 self.regs.a = value;
+                self.iff2_read = true;
                 let mut f = self.regs.f & flag::C;
                 f |= value & flag::S;
                 if value == 0 {
@@ -221,6 +236,7 @@ impl Cpu {
             bus.tick_at(de, 5);
             self.regs.pc = self.regs.pc.wrapping_sub(2);
             self.regs.wz = self.regs.pc.wrapping_add(1);
+            self.repeat_flags();
         }
     }
 
@@ -264,6 +280,7 @@ impl Cpu {
             bus.tick_at(hl, 5);
             self.regs.pc = self.regs.pc.wrapping_sub(2);
             self.regs.wz = self.regs.pc.wrapping_add(1);
+            self.repeat_flags();
         } else {
             self.regs.wz = self.regs.wz.wrapping_add(delta);
         }
@@ -283,12 +300,16 @@ impl Cpu {
         let b = self.regs.b.wrapping_sub(1);
         self.regs.b = b;
 
-        self.block_io_flags(value, self.regs.c.wrapping_add(delta as u8), b);
+        let addend = self.regs.c.wrapping_add(delta as u8);
+        self.block_io_flags(value, addend, b);
 
         if repeating && b != 0 {
             // The address the byte was written to, still on the bus.
             bus.tick_at(hl, 5);
             self.regs.pc = self.regs.pc.wrapping_sub(2);
+            self.regs.wz = self.regs.pc.wrapping_add(1);
+            self.repeat_flags();
+            self.block_io_repeat_flags(value, addend, b);
         }
     }
 
@@ -308,7 +329,8 @@ impl Cpu {
         self.regs.set_hl(hl.wrapping_add(delta));
         self.regs.wz = port.wrapping_add(delta);
 
-        self.block_io_flags(value, self.regs.l, b);
+        let addend = self.regs.l;
+        self.block_io_flags(value, addend, b);
 
         if repeating && b != 0 {
             // The port, not the source address: this group's last cycle was
@@ -316,7 +338,66 @@ impl Cpu {
             // B in it.
             bus.tick_at(port, 5);
             self.regs.pc = self.regs.pc.wrapping_sub(2);
+            self.regs.wz = self.regs.pc.wrapping_add(1);
+            self.repeat_flags();
+            self.block_io_repeat_flags(value, addend, b);
         }
+    }
+
+    /// The undocumented flag bits a repeating block instruction leaves behind,
+    /// which come from the address it is going back to rather than from
+    /// anything it moved.
+    ///
+    /// A block instruction that is going round again spends an extra machine
+    /// cycle putting `PC` back, and in 2018 David Banks worked out that the CPU
+    /// also rewrites flags 5 and 3 during it, from bits 13 and 11 of the `PC`
+    /// it has just decremented — which are bits 5 and 3 of `PCH`, the same two
+    /// positions. Every block instruction does this; the I/O ones do
+    /// [`Cpu::block_io_repeat_flags`] on top.
+    ///
+    /// Call it *after* `PC` has been put back, because it is the restored
+    /// address that is on the bus.
+    fn repeat_flags(&mut self) {
+        let pch = (self.regs.pc >> 8) as u8;
+        self.regs.f = (self.regs.f & !flag::XY) | (pch & flag::XY);
+        self.regs.q = self.regs.f;
+    }
+
+    /// What the block I/O instructions do to `H`, `P/V` and `C` in that same
+    /// extra machine cycle, on top of [`Cpu::repeat_flags`].
+    ///
+    /// There is no summarising this: the carry out of the byte-plus-index sum
+    /// is fed back into a half-carry and a parity that are computed over `B`
+    /// adjusted by one in whichever direction bit 7 of the transferred byte
+    /// says. It is transcribed from the reference rather than derived, and the
+    /// derivation is in Banks' paper.
+    ///
+    /// `value` is the byte transferred, `addend` the second term of the sum
+    /// ([`Cpu::block_io_flags`] has the rules for which), and `b` the already
+    /// decremented `B`.
+    fn block_io_repeat_flags(&mut self, value: u8, addend: u8, b: u8) {
+        let k = u16::from(value) + u16::from(addend);
+        let p = ((k & 0x07) as u8) ^ b;
+
+        let mut f = self.regs.f & (flag::S | flag::XY | flag::N);
+        if k > 0xFF {
+            f |= flag::C;
+            let (adjusted, half) = if value & 0x80 != 0 {
+                (b.wrapping_sub(1), b & 0x0F == 0x00)
+            } else {
+                (b.wrapping_add(1), b & 0x0F == 0x0F)
+            };
+            if half {
+                f |= flag::H;
+            }
+            if Regs::parity_of(p ^ (adjusted & 0x07)) {
+                f |= flag::P;
+            }
+        } else if Regs::parity_of(p ^ (b & 0x07)) {
+            f |= flag::P;
+        }
+        self.regs.f = f;
+        self.regs.q = f;
     }
 
     /// The shared — and famously strange — flag rules for the block I/O group.

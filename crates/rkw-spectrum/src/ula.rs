@@ -11,10 +11,14 @@
 //!
 //! Writing it sets the border, the speaker and the `MIC` output. Reading it
 //! returns five bits of keyboard, chosen by the address ([`crate::keyboard`]),
-//! and the `EAR` input on bit 6. The read has nothing to do with the last
-//! write: reading back what was written to the border is not possible on this
-//! machine, and software that wants to know its own border colour keeps a copy
-//! in RAM, which is what the ROM's `BORDCR` is.
+//! and the `EAR` input on bit 6. Reading back what was written to the border is
+//! not possible on this machine, and software that wants to know its own border
+//! colour keeps a copy in RAM, which is what the ROM's `BORDCR` is.
+//!
+//! Bit 6 is the exception, and it is not an exception to the *decode* but to
+//! the machine: the speaker output is wired back into the `EAR` input, so with
+//! no tape plugged in a read of bit 6 answers with the last thing written to
+//! bit 4. See [`Ula::ear`].
 //!
 //! # The border is a log, not a value
 //!
@@ -86,15 +90,23 @@ const UNUSED_BITS: u8 = 0b1010_0000;
 /// The `EAR` input, bit 6 of a port `0xFE` read.
 const EAR_BIT: u8 = 0b0100_0000;
 
+/// The speaker, bit 4 of a port `0xFE` write — and, on an issue 3 board, what
+/// bit 6 of a read comes back as when there is no tape plugged in.
+const SPEAKER_BIT: u8 = 0b0001_0000;
+
 /// The border and the frame clock.
 #[derive(Clone)]
 pub struct Ula {
     /// Which keys are down. Written by the frontend (through a command, once
     /// ticket 0026 puts input in the log) and read by the emulated program.
     pub keyboard: Keyboard,
-    /// The level on the `EAR` socket, which is what the tape loader listens to
-    /// (ticket 0016). High with nothing plugged in.
-    ear: bool,
+    /// The level a playing tape is putting on the `EAR` socket, or `None` when
+    /// nothing is driving it and the bit reads [`Ula::resting_ear`] instead.
+    ear: Option<bool>,
+    /// What bit 6 reads back with no tape on the line: the speaker bit of the
+    /// last port `0xFE` write. High until the machine has written anything,
+    /// which is a floating input rather than a decision.
+    resting_ear: bool,
     /// The last byte written to port `0xFE`, whole. Bits 0-2 are the border,
     /// bit 3 the MIC output and bit 4 the speaker.
     port_fe: u8,
@@ -130,7 +142,8 @@ impl Ula {
     pub fn new() -> Ula {
         Ula {
             keyboard: Keyboard::new(),
-            ear: true,
+            ear: None,
+            resting_ear: true,
             port_fe: 0,
             audio: EdgeLog::new(),
             border: 0,
@@ -145,6 +158,9 @@ impl Ula {
     /// A write to port `0xFE` at T-state `t`.
     pub fn write_port_fe(&mut self, t: u64, value: u8) {
         self.port_fe = value;
+        // The speaker output feeds back into the EAR input, so a write decides
+        // what a read with no tape on the line will answer.
+        self.resting_ear = value & SPEAKER_BIT != 0;
 
         // Unclamped, unlike the border's line: an offset past the end of the
         // frame is how the log carries an overrun into the next one, and a
@@ -166,26 +182,35 @@ impl Ula {
     /// address, not just of the `0xFE` in the low byte — see
     /// [`Keyboard::read`].
     pub fn read_port_fe(&self, port: u16) -> u8 {
-        let ear = if self.ear { EAR_BIT } else { 0 };
+        let ear = if self.ear() { EAR_BIT } else { 0 };
         self.keyboard.read(port) | ear | UNUSED_BITS
     }
 
-    /// The level on the `EAR` socket. The tape sets it as its edges go past
-    /// (ticket 0016); with nothing plugged in it stays where it starts, which
-    /// is high.
-    ///
-    /// A real 48K machine feeds a little of the `MIC` and speaker output back
-    /// into this bit, and whether it reads high or low with no tape depends on
-    /// which issue of the board it is. Loaders that care about the difference
-    /// are rare and none of them care yet, so the line is simply what it was
-    /// last set to.
-    pub fn set_ear(&mut self, level: bool) {
+    /// What is driving the `EAR` socket: `Some(level)` while a tape is playing,
+    /// `None` when it stops and the socket goes back to reading the machine's
+    /// own output.
+    pub fn set_ear(&mut self, level: Option<bool>) {
         self.ear = level;
     }
 
-    /// The level on the `EAR` socket.
+    /// The level bit 6 of a port `0xFE` read comes back as.
+    ///
+    /// With a tape playing it is the tape. With nothing plugged in it is *not*
+    /// a constant: the speaker output is fed back into the input, so a machine
+    /// that has just written a 1 to bit 4 reads a 1 here and one that wrote a 0
+    /// reads a 0. `IN A,(0xFE)` after `OUT (0xFE),0x07` gives `0xBF` on real
+    /// hardware and `0xFF` on an emulator that treats the line as idle-high —
+    /// which is precisely the difference raxoft's `z80test` refuses to run its
+    /// nine IN groups without.
+    ///
+    /// This is the issue 3 rule, which is the board almost every 48K machine
+    /// has and the one Fuse assumes by default. An issue 2 board feeds back
+    /// `MIC | speaker` — bit 3 as well as bit 4 — and differs only for software
+    /// that drives `MIC` without the speaker. Nothing in the tree can select a
+    /// board issue, so modelling the difference would be an untestable branch;
+    /// the two agree on everything the ROM and `z80test` do.
     pub fn ear(&self) -> bool {
-        self.ear
+        self.ear.unwrap_or(self.resting_ear)
     }
 
     /// The last byte written to port `0xFE`.
@@ -217,10 +242,21 @@ impl Ula {
         self.port_fe & 0x08 != 0
     }
 
-    /// True while `INT` is asserted, which is for [`INTERRUPT_LENGTH`]
-    /// T-states from the top of each frame.
+    /// Whether the CPU finishing an instruction at `t` sees `INT` asserted.
+    ///
+    /// The line is down for [`INTERRUPT_LENGTH`] T-states from the top of each
+    /// frame, but the Z80 reads it during the *last* T-state of the
+    /// instruction rather than at the boundary after it — so what is asked
+    /// here is whether the line was down one T-state ago. The window that
+    /// results is a T-state later than the assertion: an instruction ending
+    /// exactly on the interrupt does not take it, and one ending 32 T-states
+    /// in still does.
+    ///
+    /// It is a single subtraction rather than anything the CPU has to be told
+    /// about, which is why the machine-cycle bus of ADR-0002 does not need an
+    /// `INT` sampling hook to get this right.
     pub fn interrupt_pending(&self, t: u64) -> bool {
-        t.wrapping_sub(self.frame_start) < INTERRUPT_LENGTH
+        t.wrapping_sub(self.frame_start).wrapping_sub(1) < INTERRUPT_LENGTH
     }
 
     /// The T-state of the next frame interrupt: the scheduled event the
@@ -363,32 +399,89 @@ mod tests {
         // The two bits nothing drives stay high whatever is held.
         assert_eq!(ula.read_port_fe(0x00FE) & UNUSED_BITS, UNUSED_BITS);
 
-        ula.set_ear(false);
+        ula.set_ear(Some(false));
         assert!(!ula.ear());
         assert_eq!(ula.read_port_fe(0xFFFE), 0xFF & !EAR_BIT);
     }
 
     #[test]
-    fn what_was_written_to_port_fe_is_not_what_is_read_back() {
-        // The border is write-only: an OUT of black leaves the read alone.
+    fn the_border_is_write_only_but_the_speaker_comes_back_on_bit_six() {
+        // Nothing of the colour written can be read back...
         let mut ula = Ula::new();
-        ula.write_port_fe(0, 0x00);
-        assert_eq!(ula.border(), 0);
+        ula.write_port_fe(0, 0x07);
+        assert_eq!(ula.border(), 7);
+        assert_eq!(ula.read_port_fe(0xFEFE) & 0x07, 0x07); // keyboard, not border
+        ula.write_port_fe(0, 0x02);
+        assert_eq!(ula.read_port_fe(0xFEFE) & 0x07, 0x07);
+
+        // ...but bit 6 answers with the speaker bit of the last write, because
+        // the output is wired back into the input. This is what `z80test`
+        // checks before it will run its IN groups: `OUT (0xFE),0x07` and then
+        // `IN A,(0xFE)` has to give 0xBF, not 0xFF.
+        assert_eq!(ula.read_port_fe(0xFEFE), 0xBF);
+        ula.write_port_fe(0, 0x17);
+        assert_eq!(ula.read_port_fe(0xFEFE), 0xFF);
+
+        // The MIC bit on its own does not, on an issue 3 board.
+        ula.write_port_fe(0, 0x0F);
+        assert_eq!(ula.read_port_fe(0xFEFE), 0xBF);
+    }
+
+    #[test]
+    fn a_machine_that_has_written_nothing_reads_the_ear_line_high() {
+        // A floating input, not a decision: before the ROM has driven the
+        // speaker there is nothing feeding back into it.
+        let ula = Ula::new();
+        assert!(ula.ear());
         assert_eq!(ula.read_port_fe(0xFEFE), 0xFF);
     }
 
     #[test]
-    fn the_interrupt_is_asserted_for_thirty_two_t_states_every_frame() {
+    fn a_tape_on_the_line_wins_over_the_speaker_feedback() {
         let mut ula = Ula::new();
-        assert!(ula.interrupt_pending(0));
-        assert!(ula.interrupt_pending(INTERRUPT_LENGTH - 1));
-        assert!(!ula.interrupt_pending(INTERRUPT_LENGTH));
+        ula.write_port_fe(0, 0x10); // speaker high, so the resting level is high
+        assert!(ula.ear());
+
+        ula.set_ear(Some(false));
+        assert!(!ula.ear());
+        assert_eq!(ula.read_port_fe(0xFEFE), 0xFF & !EAR_BIT);
+
+        // And when the tape stops, the line goes back to the feedback rather
+        // than staying where the last pulse left it.
+        ula.set_ear(None);
+        assert!(ula.ear());
+    }
+
+    #[test]
+    fn the_interrupt_is_asserted_for_thirty_two_t_states_every_frame() {
+        // The line is down for T in [0, 32), and an instruction ending at T
+        // read it at T-1 — so the boundaries that take it are [1, 33).
+        let mut ula = Ula::new();
+        assert!(!ula.interrupt_pending(0));
+        assert!(ula.interrupt_pending(1));
+        assert!(ula.interrupt_pending(INTERRUPT_LENGTH));
+        assert!(!ula.interrupt_pending(INTERRUPT_LENGTH + 1));
         assert!(!ula.interrupt_pending(T_STATES_PER_FRAME - 1));
 
         assert_eq!(ula.next_interrupt(), T_STATES_PER_FRAME);
         ula.end_frame();
-        assert!(ula.interrupt_pending(T_STATES_PER_FRAME));
-        assert!(!ula.interrupt_pending(T_STATES_PER_FRAME + INTERRUPT_LENGTH));
+        assert!(!ula.interrupt_pending(T_STATES_PER_FRAME));
+        assert!(ula.interrupt_pending(T_STATES_PER_FRAME + 1));
+        assert!(!ula.interrupt_pending(T_STATES_PER_FRAME + INTERRUPT_LENGTH + 1));
+    }
+
+    #[test]
+    fn an_instruction_ending_on_the_interrupt_has_already_read_the_line() {
+        // The one T-state that separates the two conventions, spelled out: the
+        // CPU samples during its last T-state, so a boundary landing exactly
+        // where the line goes down looked one T-state too early and missed it.
+        // Thirty-two boundaries take the interrupt either way; which thirty-two
+        // is what this pins.
+        let ula = Ula::new();
+        let taking: Vec<u64> = (0..40).filter(|&t| ula.interrupt_pending(t)).collect();
+        assert_eq!(taking.len(), INTERRUPT_LENGTH as usize);
+        assert_eq!(taking[0], 1);
+        assert_eq!(*taking.last().unwrap(), INTERRUPT_LENGTH);
     }
 
     #[test]

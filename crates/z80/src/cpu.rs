@@ -56,6 +56,14 @@ pub struct Cpu {
     /// sampled while this is true, which is what makes the `EI` / `HALT` idiom
     /// work.
     pub ei_pending: bool,
+    /// Set by `LD A,I` and `LD A,R`, cleared by the next instruction. It is
+    /// what an interrupt accepted immediately afterwards consults to know it
+    /// has to undo the `P/V` those two just wrote — see [`Cpu::take_interrupt`].
+    pub iff2_read: bool,
+    /// Set by `RETN` and `RETI` when they found `IFF1` and `IFF2` disagreeing,
+    /// which only an NMI can bring about. An interrupt is not accepted after
+    /// such a return.
+    pub iff_restored: bool,
     /// Instructions retired since reset. Useful for debugger stepping and for
     /// bisecting conformance failures.
     pub instructions: u64,
@@ -69,15 +77,53 @@ impl Cpu {
     pub fn reset(&mut self) {
         self.regs.reset();
         self.ei_pending = false;
+        self.iff2_read = false;
+        self.iff_restored = false;
     }
 
     /// Run one instruction, taking any pending interrupt first.
+    ///
+    /// # Where the interrupt is sampled
+    ///
+    /// Here, between instructions, and nowhere else — which is the whole of the
+    /// rule. The Z80 reads `INT` during the last T-state of an instruction's
+    /// last machine cycle, so what it can interrupt is exactly what this core
+    /// treats as one `step`: a `DD CB d op` is four bytes and one step, an
+    /// invalid `ED xx` is two bytes and one step, and neither can be broken
+    /// into. That is what the "NONI" of the decoding tables means — an
+    /// interrupt is not taken between a prefix and the byte it prefixes,
+    /// because the prefix has set state the CPU has nowhere to keep.
+    ///
+    /// A repeating block instruction is the other side of the same coin: it is
+    /// one step *per iteration*, and the interrupt taken between two of them
+    /// finds `PC` back on the `ED`, which is how a 64K `LDIR` can be
+    /// interrupted 65,535 times and still finish.
+    ///
+    /// The one thing not modelled is *where in the final T-state* the line is
+    /// read. `INT` is a level here, and [`Bus::interrupt_pending`] is asked at
+    /// the boundary; a machine that asserted the line for less than an
+    /// instruction would need more than that, and no machine this core drives
+    /// does.
     pub fn step(&mut self, bus: &mut impl Bus) -> Stop {
+        // Both of these belong to the instruction that has just finished, so
+        // they are taken now and are false for the one about to run.
+        let iff2_read = core::mem::take(&mut self.iff2_read);
+        let iff_restored = core::mem::take(&mut self.iff_restored);
+
         if bus.nmi_pending() {
             self.take_nmi(bus);
             return Stop::Nmi;
         }
-        if self.regs.iff1 && !self.ei_pending && bus.interrupt_pending() {
+        if self.regs.iff1 && !self.ei_pending && !iff_restored && bus.interrupt_pending() {
+            if iff2_read {
+                // The NMOS bug: `LD A,I` copied `IFF2` into `P/V`, and then the
+                // interrupt cleared `IFF2` before the copy had settled, so what
+                // is left in the flag is the value it was about to become. The
+                // Q latch tracks it, because the instruction is still the thing
+                // that wrote the flag; only the value is different.
+                self.regs.set_flag(flag::P, false);
+                self.regs.q = self.regs.f;
+            }
             self.take_interrupt(bus);
             return Stop::Interrupt;
         }

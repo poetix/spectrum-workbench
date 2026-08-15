@@ -85,13 +85,21 @@ impl Spectrum {
     /// program that is already in its loading loop sees the pilot immediately.
     pub fn play_tape(&mut self) {
         self.tape.play(self.t);
-        self.ula.set_ear(self.tape.level());
+        self.drive_ear();
     }
 
-    /// Stop the tape and let the `EAR` line go back to idle.
+    /// Stop the tape and let the `EAR` line go back to what the machine's own
+    /// speaker output puts on it.
     pub fn stop_tape(&mut self) {
         self.tape.stop();
-        self.ula.set_ear(self.tape.level());
+        self.drive_ear();
+    }
+
+    /// Hand the ULA whoever is driving the `EAR` socket: the tape while it is
+    /// playing, and nobody once it stops.
+    fn drive_ear(&mut self) {
+        let level = self.tape.is_playing().then(|| self.tape.level());
+        self.ula.set_ear(level);
     }
 
     /// True when the clock has reached the end of the frame in progress.
@@ -345,8 +353,10 @@ impl Machine for Spectrum {
     /// the clock past a frame boundary and a pulse at once.
     fn service_event(&mut self) {
         if self.tape.next_edge().is_some_and(|edge| self.t >= edge) {
-            let level = self.tape.advance_to(self.t);
-            self.ula.set_ear(level);
+            // The tape may have run off its end here, in which case it stops
+            // driving the line rather than holding it at the last level.
+            self.tape.advance_to(self.t);
+            self.drive_ear();
         }
         if self.frame_due() {
             self.ula.end_frame();
