@@ -168,6 +168,61 @@ fn the_prompt_takes_keyboard_input() {
     assert!(board.screen_contains("PRINT L"));
 }
 
+/// Type `PRINT`, then press DELETE with the press landing at each of `offsets`
+/// T-states into a frame, and report the offsets after which a `0` appeared on
+/// the screen — which is DELETE read as half of itself.
+fn zeroes_typed_by_delete(offsets: impl Iterator<Item = u64>, latched: bool) -> Option<Vec<u64>> {
+    let rom = common::rom()?;
+    let mut caught = Vec::new();
+    for offset in offsets {
+        let mut board = Board::new(&rom);
+        board.run_frames(BOOT_FRAMES);
+        board.press(&[Key::P]);
+        assert!(board.screen_contains("PRINT"), "nothing to delete");
+
+        if latched {
+            board.press_latched(&[Key::CapsShift, Key::Num0], offset);
+        } else {
+            board.press_immediately(&[Key::CapsShift, Key::Num0], offset);
+        }
+        if board.screen_contains("0") {
+            caught.push(offset);
+        }
+    }
+    Some(caught)
+}
+
+#[test]
+fn delete_landing_mid_frame_deletes_rather_than_typing_a_zero() {
+    // DELETE is CAPS SHIFT and 0 on two half-rows the ROM's KEY-SCAN reads
+    // hundreds of T-states apart, so a matrix written straight in as the host
+    // event arrives can be read as the digit alone. The next press then deletes
+    // the 0 and the one after it deletes what the user meant to delete: the
+    // "delete emits a 0 first" the frontend was seeing.
+    //
+    // The sweep is the first thousand T-states of the frame, which is where
+    // the handler at $0038 does its scanning: written straight in, the presses
+    // that tear are the ones landing between roughly 190 and 450 T-states past
+    // the interrupt. That is a quarter of one per cent of a frame, and it is
+    // why the frontend saw this now and then rather than every time.
+    let offsets = || (0..1_024).step_by(32).map(|t| t as u64);
+
+    let Some(torn) = zeroes_typed_by_delete(offsets(), false) else {
+        eprintln!("{}", common::skip_message());
+        return;
+    };
+    assert!(
+        !torn.is_empty(),
+        "the sweep never landed mid-scan, so it proves nothing"
+    );
+
+    let latched = zeroes_typed_by_delete(offsets(), true).expect("the ROM was there a moment ago");
+    assert!(
+        latched.is_empty(),
+        "a latched DELETE still typed a 0 at {latched:?}"
+    );
+}
+
 #[test]
 fn a_basic_program_can_be_typed_and_run() {
     let mut board = booted!();

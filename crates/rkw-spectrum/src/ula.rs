@@ -60,6 +60,15 @@
 //! machine's part in this, and [`rkw_audio`] — which cannot name a `Spectrum`
 //! — is the rest (ADR-0021).
 //!
+//! # The keyboard changes at frame boundaries
+//!
+//! The matrix a frontend hands over is latched and applied at the top of the
+//! next frame ([`Ula::set_keyboard`]) rather than the instant the host key
+//! event arrives, because the ROM's scan of the eight half-rows is spread over
+//! several hundred T-states and a matrix that moved during one would be read
+//! half from each side of the change. A frontend at 50 Hz loses nothing by it:
+//! the ROM only looks once a frame anyway.
+//!
 //! # The interrupt is derived, not raised
 //!
 //! `INT` is asserted for [`INTERRUPT_LENGTH`] T-states at the top of every
@@ -97,9 +106,13 @@ const SPEAKER_BIT: u8 = 0b0001_0000;
 /// The border and the frame clock.
 #[derive(Clone)]
 pub struct Ula {
-    /// Which keys are down. Written by the frontend (through a command, once
-    /// ticket 0026 puts input in the log) and read by the emulated program.
+    /// Which keys are down, as the emulated program reads them. A test or a
+    /// debugger that wants a key down *now* writes it here; a frontend does
+    /// not — see [`Ula::set_keyboard`].
     pub keyboard: Keyboard,
+    /// A matrix waiting for the top of the next frame, if a frontend has
+    /// handed one over since the last one started.
+    pending: Option<Keyboard>,
     /// The level a playing tape is putting on the `EAR` socket, or `None` when
     /// nothing is driving it and the bit reads [`Ula::resting_ear`] instead.
     ear: Option<bool>,
@@ -142,6 +155,7 @@ impl Ula {
     pub fn new() -> Ula {
         Ula {
             keyboard: Keyboard::new(),
+            pending: None,
             ear: None,
             resting_ear: true,
             port_fe: 0,
@@ -184,6 +198,39 @@ impl Ula {
     pub fn read_port_fe(&self, port: u16) -> u8 {
         let ear = if self.ear() { EAR_BIT } else { 0 };
         self.keyboard.read(port) | ear | UNUSED_BITS
+    }
+
+    /// The matrix the machine should be reading from the next frame on: what a
+    /// frontend calls when a host key goes down or up.
+    ///
+    /// It is latched rather than applied because the ROM does not read the
+    /// keyboard in one go. `KEY-SCAN` at `$028E` walks a single low bit up
+    /// through the half-rows — `CAPS SHIFT`'s first, at `$FEFE`, and the
+    /// `0`-to-`6` row fifth, at `$EFFE` — and several hundred T-states separate
+    /// the two reads. A matrix that changed in between would be read half from
+    /// before the change and half from after, and a combination whose keys are
+    /// on different half-rows would arrive as one key.
+    ///
+    /// `DELETE` is exactly that combination. Press it in the wrong few hundred
+    /// T-states of a frame and the scan sees `0` without the `CAPS SHIFT` above
+    /// it, which is not `DELETE` but the digit — so a `0` is typed, and the two
+    /// presses after it delete the `0` and then the character the user meant.
+    /// Latching to the frame boundary, which is where the interrupt that runs
+    /// the scan is raised, makes the matrix constant for the whole of every
+    /// scan and the tear impossible.
+    ///
+    /// A call within the same frame replaces the one before it: the host key
+    /// events between two frames are one state, not a queue, and pressing and
+    /// releasing a key inside a single frame is a keypress the hardware would
+    /// not have shown the ROM either.
+    pub fn set_keyboard(&mut self, keyboard: Keyboard) {
+        self.pending = Some(keyboard);
+    }
+
+    /// The matrix waiting for the next frame, or the one in force if nothing
+    /// is waiting: what the frontend last said, whenever it said it.
+    pub fn latched_keyboard(&self) -> Keyboard {
+        self.pending.unwrap_or(self.keyboard)
     }
 
     /// What is driving the `EAR` socket: `Some(level)` while a tape is playing,
@@ -292,7 +339,9 @@ impl Ula {
     }
 
     /// The clock has reached [`Ula::next_interrupt`]: finish the frame, present
-    /// it, and start the next one.
+    /// it, and start the next one — which is also where a matrix a frontend
+    /// latched with [`Ula::set_keyboard`] takes effect, before the interrupt
+    /// this raises has had a chance to scan it.
     ///
     /// The new frame starts at the scheduled T-state rather than at whatever
     /// the clock has actually reached, because the last instruction of a slice
@@ -300,6 +349,9 @@ impl Ula {
     /// that took its start from that would drift by however much of the frame
     /// the emulated program happened to spend in long instructions.
     pub fn end_frame(&mut self) {
+        if let Some(keyboard) = self.pending.take() {
+            self.keyboard = keyboard;
+        }
         self.fill_to(LINES_PER_FRAME);
         self.presented = self.lines;
         self.filled = 0;
@@ -402,6 +454,40 @@ mod tests {
         ula.set_ear(Some(false));
         assert!(!ula.ear());
         assert_eq!(ula.read_port_fe(0xFFFE), 0xFF & !EAR_BIT);
+    }
+
+    #[test]
+    fn a_latched_matrix_arrives_whole_at_the_top_of_the_next_frame() {
+        use crate::keyboard::{Key, Keyboard};
+
+        let mut ula = Ula::new();
+        // DELETE: two keys, two half-rows, and the pair the ROM's scan would
+        // read either side of a change made part way through it.
+        ula.set_keyboard(Keyboard::holding(&[Key::CapsShift, Key::Num0]));
+        assert_eq!(ula.read_port_fe(Key::CapsShift.port()), 0xFF);
+        assert_eq!(ula.read_port_fe(Key::Num0.port()), 0xFF);
+        assert_eq!(
+            ula.latched_keyboard(),
+            Keyboard::holding(&[Key::CapsShift, Key::Num0]),
+            "the frontend can read back what it last said"
+        );
+
+        ula.end_frame();
+        assert_eq!(ula.read_port_fe(Key::CapsShift.port()), 0xFE);
+        assert_eq!(ula.read_port_fe(Key::Num0.port()), 0xFE);
+
+        // A second latch within one frame replaces the first: host key events
+        // between two frames are a state and not a queue.
+        ula.set_keyboard(Keyboard::holding(&[Key::Num0]));
+        ula.set_keyboard(Keyboard::new());
+        ula.end_frame();
+        assert_eq!(ula.keyboard, Keyboard::new());
+        assert_eq!(ula.latched_keyboard(), Keyboard::new());
+
+        // And a frame that was latched nothing leaves the matrix alone.
+        ula.keyboard.press(Key::Space);
+        ula.end_frame();
+        assert!(ula.keyboard.is_pressed(Key::Space));
     }
 
     #[test]

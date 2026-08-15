@@ -37,7 +37,7 @@ use std::path::PathBuf;
 use rkw_debug::machine::Machine;
 use rkw_spectrum::frame::T_STATES_PER_FRAME;
 use rkw_spectrum::screen::{COLUMNS, ROWS, pixel_addr};
-use rkw_spectrum::{Framebuffer, Key, SCREEN_BASE, Spectrum};
+use rkw_spectrum::{Framebuffer, Key, Keyboard, SCREEN_BASE, Spectrum};
 use z80::Cpu;
 
 /// Where the ROM's font starts. The `CHARS` system variable holds `0x3C00`,
@@ -140,6 +140,29 @@ impl Board {
         for key in keys {
             self.machine.ula.keyboard.release(*key);
         }
+        self.run_frames(GAP_FRAMES);
+    }
+
+    /// Press `keys` the way a frontend does — latched rather than written into
+    /// the matrix — with the press landing `offset` T-states into a frame
+    /// rather than tidily on a boundary, which is where a host key event
+    /// actually arrives.
+    pub fn press_latched(&mut self, keys: &[Key], offset: u64) {
+        self.run_to(self.machine.t_states() + offset);
+        self.machine.ula.set_keyboard(Keyboard::holding(keys));
+        self.run_frames(HOLD_FRAMES);
+        self.machine.ula.set_keyboard(Keyboard::new());
+        self.run_frames(GAP_FRAMES);
+    }
+
+    /// The same keystroke written straight into the matrix, which is what a
+    /// frontend that does not latch does. Only a test that is *about* the
+    /// difference wants this.
+    pub fn press_immediately(&mut self, keys: &[Key], offset: u64) {
+        self.run_to(self.machine.t_states() + offset);
+        self.machine.ula.keyboard = Keyboard::holding(keys);
+        self.run_frames(HOLD_FRAMES);
+        self.machine.ula.keyboard = Keyboard::new();
         self.run_frames(GAP_FRAMES);
     }
 

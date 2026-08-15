@@ -16,16 +16,34 @@ use rkw_spectrum::{Keyboard, Spectrum};
 use z80::Cpu;
 use z80::disasm::Peek;
 
-/// Read the half-row `CAPS SHIFT` is on into `A`, store it, and stop.
+/// Let a frame boundary go by, then read the half-row `CAPS SHIFT` is on into
+/// `A`, store it, and stop.
 ///
 /// ```text
-/// 8000  01 FE FE           ld bc,$FEFE
-/// 8003  ED 78              in a,(c)
-/// 8005  32 00 90           ld ($9000),a
-/// 8008  76                 halt
+/// 8000  0E 16              ld c,22
+/// 8002  06 00              ld b,0
+/// 8004  10 FE              djnz $        ; 3323 T
+/// 8006  0D                 dec c
+/// 8007  20 F9              jr nz,$-7
+/// 8009  01 FE FE           ld bc,$FEFE
+/// 800C  ED 78              in a,(c)
+/// 800E  32 00 90           ld ($9000),a
+/// 8011  76                 halt
 /// ```
+///
+/// The delay is the point, and 22 turns of it is 73,607 T-states — one frame
+/// and a bit. A matrix handed over by a frontend is latched and applied at the
+/// top of the next frame ([`rkw_spectrum::Ula::set_keyboard`]), so a program
+/// that read the keyboard the instant the command arrived would read the
+/// matrix from before it. A real program does not do that either: it scans
+/// from the interrupt handler, which is to say just after a frame boundary.
 #[rustfmt::skip]
-const READ_HALF_ROW: &[u8] = &[
+const READ_HALF_ROW_NEXT_FRAME: &[u8] = &[
+    0x0E, 0x16,
+    0x06, 0x00,
+    0x10, 0xFE,
+    0x0D,
+    0x20, 0xF9,
     0x01, 0xFE, 0xFE,
     0xED, 0x78,
     0x32, 0x00, 0x90,
@@ -34,7 +52,7 @@ const READ_HALF_ROW: &[u8] = &[
 
 fn machine() -> (Cpu, Spectrum) {
     let mut spectrum = Spectrum::new();
-    spectrum.memory.load(0x8000, READ_HALF_ROW);
+    spectrum.memory.load(0x8000, READ_HALF_ROW_NEXT_FRAME);
     let mut cpu = Cpu::new();
     cpu.regs.pc = 0x8000;
     cpu.regs.sp = 0xFF00;

@@ -370,8 +370,12 @@ impl Machine for Spectrum {
     /// A frontend sends the state it is holding rather than the change, so
     /// this replaces the keyboard instead of editing it, and a machine whose
     /// window has just lost focus is a matrix of zero like any other.
+    ///
+    /// It is latched rather than applied, so the keys arrive at the top of the
+    /// next frame and not in the middle of whatever scan is running — see
+    /// [`Ula::set_keyboard`], which is where the reason is.
     fn set_keys(&mut self, matrix: u64) {
-        self.ula.keyboard = Keyboard::from_matrix(matrix);
+        self.ula.set_keyboard(Keyboard::from_matrix(matrix));
     }
 
     /// The transport buttons, and the `EAR` line each of them leaves behind.

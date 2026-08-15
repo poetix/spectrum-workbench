@@ -398,6 +398,13 @@ log with everything else
 therefore replays with the typing in it, which is what tickets 0026 and 0029
 need and what an atomic full of key bits could not give.
 
+The matrix is then latched and applied at the top of the next frame rather than
+where the command lands. The ROM's `KEY-SCAN` walks the eight half-rows over
+several hundred T-states, so a matrix that moves part way through one is read
+half from each side of the change — and `DELETE`, whose two keys are on
+half-rows one and five, arrives as a bare `0`. Fifty updates a second is all a
+keyboard needs, and it is what the hardware gives the ROM anyway.
+
 The picture crosses threads as a swap chain rather than a copy: `Presenting<M>`
 paints each finished frame on the emulation thread and exchanges two boxes with
 the window, which never blocks the machine and never allocates.

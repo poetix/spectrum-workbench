@@ -7,6 +7,7 @@
 //! the difference between a keyboard that works and one that answers every
 //! half-row with the same five bits.
 
+use rkw_debug::machine::Machine;
 use rkw_spectrum::keyboard::{HALF_ROWS, Key, half_row_port};
 use rkw_spectrum::keymap::{HostKey, HostKeys, KeyMap};
 use rkw_spectrum::{Keyboard, Spectrum};
@@ -211,6 +212,105 @@ fn what_the_host_holds_is_what_the_program_reads() {
     // And the window losing focus lets go of everything.
     host.clear();
     assert_eq!(scan(host.matrix(&KeyMap::PC)), [0xFF; HALF_ROWS]);
+}
+
+/// Run [`SCAN`], applying `change` to the machine just before the `IN` that
+/// reads half-row `before` — so the change lands in the middle of a scan, which
+/// is where a host key event actually arrives.
+fn scan_interrupted_at(before: usize, change: impl FnOnce(&mut Spectrum)) -> [u8; HALF_ROWS] {
+    let mut machine = Spectrum::new();
+    let mut cpu = Cpu::new();
+    machine.memory.load(0x8000, SCAN);
+    cpu.regs.pc = 0x8000;
+    cpu.regs.sp = 0xFF00;
+
+    let mut change = Some(change);
+    let mut reads = 0;
+    for _ in 0..10_000 {
+        if machine.memory.read(cpu.regs.pc) == 0x76 {
+            break;
+        }
+        // 0x8008 is the `in a,(c)`, and `reads` is the half-row it is about to
+        // take: the scan starts at $FEFE and rotates upwards.
+        if cpu.regs.pc == 0x8008 {
+            if reads == before {
+                change.take().expect("one change")(&mut machine);
+            }
+            reads += 1;
+        }
+        cpu.step(&mut machine);
+    }
+    assert_eq!(reads, HALF_ROWS, "the scan did not finish");
+
+    let mut rows = [0; HALF_ROWS];
+    for (half_row, byte) in rows.iter_mut().enumerate() {
+        *byte = machine.memory.read(0x9000 + half_row as u16);
+    }
+    rows
+}
+
+#[test]
+fn a_key_pressed_part_way_through_a_scan_is_not_half_read() {
+    // The bug this guards: DELETE is CAPS SHIFT and 0, the two are on
+    // half-rows 0 and 4, and the ROM's scan reads them hundreds of T-states
+    // apart. A matrix that changed in between would be read half from each
+    // side of the change, and half of DELETE is the digit 0 — which the ROM
+    // dutifully types.
+    let delete = Keyboard::holding(&[Key::CapsShift, Key::Num0]);
+    let shift_row = Key::CapsShift.half_row();
+    let zero_row = Key::Num0.half_row();
+    assert!(shift_row < zero_row, "the test's own premise");
+
+    // Written straight into the matrix, which is the debugger's path and not a
+    // frontend's, that is exactly what happens: no shift, and a 0.
+    let torn = scan_interrupted_at(zero_row, |machine| machine.ula.keyboard = delete);
+    assert_eq!(
+        torn[shift_row], 0xFF,
+        "CAPS SHIFT was read before the press"
+    );
+    assert_eq!(torn[zero_row], 0xFF & !Key::Num0.mask(), "0 after it");
+
+    // Latched, the scan cannot see it at all: it belongs to the next frame.
+    let whole = scan_interrupted_at(zero_row, |machine| machine.ula.set_keyboard(delete));
+    assert_eq!(whole, [0xFF; HALF_ROWS]);
+
+    // Landing anywhere else in the scan makes no difference either, which is
+    // the property — not that this particular pair is special.
+    for half_row in 0..HALF_ROWS {
+        let rows = scan_interrupted_at(half_row, |machine| machine.ula.set_keyboard(delete));
+        assert_eq!(
+            rows, [0xFF; HALF_ROWS],
+            "latched before half-row {half_row}"
+        );
+    }
+
+    // And once the frame ends, both keys are there together.
+    let rows = scan_interrupted_at(0, |machine| {
+        machine.ula.set_keyboard(delete);
+        machine.ula.end_frame();
+    });
+    assert_eq!(rows[shift_row], 0xFF & !Key::CapsShift.mask());
+    assert_eq!(rows[zero_row], 0xFF & !Key::Num0.mask());
+}
+
+#[test]
+fn a_frontend_hands_the_machine_host_keys_and_they_arrive_next_frame() {
+    let mut machine = Spectrum::new();
+    let mut host = HostKeys::new();
+    host.press(HostKey::Backspace);
+
+    machine.set_keys(host.matrix(&KeyMap::PC).matrix());
+    assert_eq!(machine.ula.keyboard, Keyboard::new(), "not yet");
+    machine.ula.end_frame();
+    assert_eq!(
+        machine.ula.keyboard,
+        Keyboard::holding(&[Key::CapsShift, Key::Num0])
+    );
+
+    host.release(HostKey::Backspace);
+    machine.set_keys(host.matrix(&KeyMap::PC).matrix());
+    machine.ula.end_frame();
+    assert_eq!(machine.ula.keyboard, Keyboard::new());
 }
 
 #[test]
