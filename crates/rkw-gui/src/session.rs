@@ -86,6 +86,15 @@ impl Session {
     /// sample ring nobody drains would fill once and stop the machine for
     /// good. What the caller gets told is the error, so that it can say so.
     pub fn new(spectrum: Spectrum) -> (Session, Option<speaker::Error>) {
+        Session::starting_at(spectrum, Cpu::new())
+    }
+
+    /// The same, with the CPU the caller wants rather than one at reset.
+    ///
+    /// A machine booting a ROM starts at `0x0000` and needs nothing said about
+    /// it. A program loaded straight into RAM — an assembled game, a snapshot —
+    /// has an entry point instead, and this is where it comes in.
+    pub fn starting_at(spectrum: Spectrum, cpu: Cpu) -> (Session, Option<speaker::Error>) {
         // The device comes first because its rate is what the beeper is built
         // for, and the stream is opened before the thread is spawned, so that
         // a device which fails half way through has not left a machine
@@ -119,7 +128,7 @@ impl Session {
             None => Pacer::silent(speed.clone()),
         };
         let (mut handle, join) = emu::spawn_paced(
-            Cpu::new(),
+            cpu,
             machine,
             Debugger::new(),
             Config::default(),

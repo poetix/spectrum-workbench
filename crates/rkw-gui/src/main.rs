@@ -6,10 +6,12 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use rkw_asm::{SourceMap, assemble};
 use rkw_gui::Session;
 use rkw_gui::app;
 use rkw_spectrum::Spectrum;
 use rkw_tape::{Image, Tap, Tzx};
+use z80::Cpu;
 
 const USAGE: &str = "\
 rkw — a 48K ZX Spectrum in a window
@@ -18,6 +20,8 @@ usage: rkw [options]
 
   --rom FILE          the 48K ROM to boot. Without one the machine runs from
                       an empty memory, which is a black screen and a lesson.
+  --asm FILE          assemble a source file into memory and run it, instead
+                      of booting. For a game that is not on a tape yet.
   --tape FILE         mount a .tap or .tzx. Type LOAD \"\" and press F6.
   --play              start the tape immediately, for a machine already
                       sitting in a loading loop
@@ -37,6 +41,7 @@ ALT are both SYMBOL SHIFT, and the cursor keys are CAPS SHIFT and 5 to 8.";
 
 struct Options {
     rom: Option<PathBuf>,
+    asm: Option<PathBuf>,
     tape: Option<PathBuf>,
     play: bool,
     scale: u32,
@@ -47,6 +52,7 @@ impl Default for Options {
     fn default() -> Options {
         Options {
             rom: None,
+            asm: None,
             tape: None,
             play: false,
             // Three is 1056x888, which fits on any screen this will run on and
@@ -86,6 +92,7 @@ fn parse_args() -> Result<Option<Options>, String> {
                 return Ok(None);
             }
             "--rom" => options.rom = Some(PathBuf::from(value("--rom")?)),
+            "--asm" => options.asm = Some(PathBuf::from(value("--asm")?)),
             "--tape" => options.tape = Some(PathBuf::from(value("--tape")?)),
             "--play" => options.play = true,
             "--fullscreen" => options.fullscreen = true,
@@ -120,13 +127,52 @@ fn run(options: Options) -> Result<(), String> {
         }
     }
 
-    let (session, no_sound) = Session::new(spectrum);
+    // A source file is assembled into the machine and started at its own
+    // origin, which is what a game that has no tape yet needs.
+    let mut cpu = Cpu::new();
+    if let Some(path) = &options.asm {
+        cpu.regs.pc = assemble_into(&mut spectrum, path)?;
+        cpu.regs.sp = STACK_UNTIL_TOLD_OTHERWISE;
+    }
+
+    let (session, no_sound) = Session::starting_at(spectrum, cpu);
     // Said once and not fatal: a machine with a picture and no sound is worth
     // more than an error message.
     if let Some(e) = no_sound {
         eprintln!("rkw: no sound ({e}); running silent");
     }
     app::run(session, options.scale, options.fullscreen).map_err(|e| e.to_string())
+}
+
+/// Where the stack goes until the program says otherwise, which every program
+/// that sets `SP` in its first instruction does.
+const STACK_UNTIL_TOLD_OTHERWISE: u16 = 0xFF00;
+
+/// Assemble `path` into `spectrum`, and answer with where to start.
+///
+/// The whole of it: there is no debug information to keep, because the window
+/// has no breakpoints to hang off it. `rkwdbg` is where a source file goes to
+/// be looked at; this is where it goes to be played.
+fn assemble_into(spectrum: &mut Spectrum, path: &Path) -> Result<u16, String> {
+    let mut map = SourceMap::new();
+    let file = map
+        .load(path)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let assembled = assemble(&mut map, file);
+    if assembled.has_errors() {
+        return Err(assembled
+            .diagnostics
+            .iter()
+            .map(|d| map.render(d))
+            .collect::<String>());
+    }
+    for segment in assembled.image.segments() {
+        spectrum.memory.load(segment.origin, &segment.bytes);
+    }
+    assembled
+        .image
+        .origin()
+        .ok_or_else(|| format!("{}: nothing was assembled", path.display()))
 }
 
 /// A tape, read as whatever its extension says it is — and, failing that, as
