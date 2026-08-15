@@ -64,7 +64,9 @@ fn main() {
             }
             other => {
                 eprintln!("unknown argument {other:?}");
-                eprintln!("usage: beep [--delay N] [--seconds S] [--speaker piezo|tv|flat] [--out FILE]");
+                eprintln!(
+                    "usage: beep [--delay N] [--seconds S] [--speaker piezo|tv|flat] [--out FILE]"
+                );
                 std::process::exit(2);
             }
         }
@@ -93,8 +95,7 @@ fn play(delay: u8, speaker: Speaker, seconds: f64) -> Vec<f32> {
     spectrum.memory.load(0x8000, &tone(delay));
     spectrum.memory.load(0x0038, HANDLER);
 
-    let config =
-        Config::new(CLOCK_HZ, T_STATES_PER_FRAME as u32, SAMPLE_RATE).speaker(speaker);
+    let config = Config::new(CLOCK_HZ, T_STATES_PER_FRAME as u32, SAMPLE_RATE).speaker(speaker);
     let mut cpu = Cpu::new();
     cpu.regs.pc = 0x8000;
     cpu.regs.sp = 0xFF00;

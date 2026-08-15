@@ -231,9 +231,7 @@ impl Chain {
     pub fn process(&mut self, x: f32) -> f32 {
         match &mut self.stages {
             None => x,
-            Some((high, peak, low)) => {
-                low.process(peak.process(high.process(f64::from(x)))) as f32
-            }
+            Some((high, peak, low)) => low.process(peak.process(high.process(f64::from(x)))) as f32,
         }
     }
 
@@ -287,8 +285,14 @@ mod tests {
         let above = gain_db(Speaker::Piezo, 4_500.0, 48_000.0);
 
         assert!(at_peak > below + 3.0, "{at_peak} dB vs {below} dB at 1 kHz");
-        assert!(at_peak > above + 3.0, "{at_peak} dB vs {above} dB at 4.5 kHz");
-        assert!(at_peak > 3.0, "the bell should lift, not just shape: {at_peak}");
+        assert!(
+            at_peak > above + 3.0,
+            "{at_peak} dB vs {above} dB at 4.5 kHz"
+        );
+        assert!(
+            at_peak > 3.0,
+            "the bell should lift, not just shape: {at_peak}"
+        );
     }
 
     #[test]

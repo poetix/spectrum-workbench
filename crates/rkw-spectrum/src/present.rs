@@ -31,9 +31,10 @@
 //! honest thing to do with a frame nobody drew is drop it and say so. That is
 //! the same bargain the event ring makes, for the same reason.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use rkw_debug::command::Tape as TapeButton;
 use rkw_debug::machine::{Clock, Machine};
 use z80::Bus;
 use z80::disasm::Peek;
@@ -53,6 +54,14 @@ struct Shared {
     published: AtomicU64,
     taken: AtomicU64,
     missed: AtomicU64,
+    /// Whether the deck was running when the last frame was published.
+    ///
+    /// A window that remembered whether it had pressed play would be wrong
+    /// twice a load: a tape runs off its end, and a TZX block can stop it. So
+    /// the answer comes from the machine, once a frame, up the same path as
+    /// the picture — which is quite fast enough for a title bar, and is
+    /// nowhere near the emulation thread's hot path.
+    tape_playing: AtomicBool,
 }
 
 /// The producer's end, which lives on the emulation thread.
@@ -79,6 +88,7 @@ pub fn channel() -> (FrameSink, FrameSource) {
         published: AtomicU64::new(0),
         taken: AtomicU64::new(0),
         missed: AtomicU64::new(0),
+        tape_playing: AtomicBool::new(false),
     });
     // Take the lock once, here, and let it go. On some platforms a `Mutex`
     // allocates the first time it is locked, and the first lock would
@@ -110,6 +120,12 @@ impl FrameSink {
     /// never allocates: the buffer that goes in is the one that comes out.
     pub fn publish(&mut self, machine: &Spectrum) {
         machine.render(&mut self.scratch);
+        // Before the `try_lock`, so a dropped frame still leaves the deck's
+        // state current: a load that finished is worth knowing about whether
+        // or not the window drew the frame it finished on.
+        self.shared
+            .tape_playing
+            .store(machine.tape.is_playing(), Ordering::Relaxed);
         let Ok(mut slot) = self.shared.slot.try_lock() else {
             self.shared.missed.fetch_add(1, Ordering::Relaxed);
             return;
@@ -166,6 +182,15 @@ impl FrameSource {
     /// Frames handed to the consumer.
     pub fn taken(&self) -> u64 {
         self.shared.taken.load(Ordering::Relaxed)
+    }
+
+    /// Whether the tape was running at the last frame the machine painted.
+    ///
+    /// A frontend shows this rather than what it last asked for, because the
+    /// deck stops on its own: at the end of the tape, and at a TZX block that
+    /// says to.
+    pub fn tape_playing(&self) -> bool {
+        self.shared.tape_playing.load(Ordering::Relaxed)
     }
 }
 
@@ -307,6 +332,10 @@ impl<M: Machine + AsRef<Spectrum>> Machine for Presenting<M> {
     fn set_keys(&mut self, matrix: u64) {
         self.inner.set_keys(matrix);
     }
+
+    fn tape(&mut self, button: TapeButton) {
+        self.inner.tape(button);
+    }
 }
 
 #[cfg(test)]
@@ -367,6 +396,25 @@ mod tests {
         sink.publish(&machine);
         assert_eq!(source.latest().pixel(0, 0), 1);
         assert_eq!(source.take().map(|f| f.pixel(0, 0)), Some(6));
+    }
+
+    /// The window's tape light. It has to come from the deck rather than from
+    /// what the window last asked for, because the deck stops on its own.
+    #[test]
+    fn the_deck_reports_itself_with_each_frame() {
+        let (mut sink, source) = channel();
+        let mut machine = Spectrum::new();
+        sink.publish(&machine);
+        assert!(!source.tape_playing(), "nothing is mounted");
+
+        machine.mount_tape(rkw_tape::Tap::builder().block(0xFF, &[0x00]).build());
+        machine.tape(TapeButton::Play);
+        sink.publish(&machine);
+        assert!(source.tape_playing());
+
+        machine.tape(TapeButton::Stop);
+        sink.publish(&machine);
+        assert!(!source.tape_playing());
     }
 
     #[test]

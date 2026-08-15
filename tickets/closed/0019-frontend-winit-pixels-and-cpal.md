@@ -126,6 +126,11 @@ elsewhere", and the second half of that acceptance criterion is untested.
 
 The window has no menu, no file dialogue and no on-screen status: mounting a
 tape and choosing a ROM are command-line arguments, and the title bar carries
-the run state, the speed and the mute. A debugger pane is deliberately absent
+the run state, the speed, the mute and whether the tape is running. What the
+tape does once it is mounted *is* in the window — F6 plays or stops it and F7
+rewinds — because a load starts after `LOAD ""` has been typed, which is
+several seconds after the command line is gone. Those go through
+`Command::Tape` like every other input, so the moment the pilot tone started is
+a T-state in the log. A debugger pane is deliberately absent
 (ADR-0013), and the counters that would feed a status line — missed frames,
 underruns — are on `Session` waiting for one.

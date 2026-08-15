@@ -23,7 +23,7 @@
 use std::thread::JoinHandle;
 
 use rkw_audio::{Volume, ring};
-use rkw_debug::command::Command;
+use rkw_debug::command::{Command, Tape};
 use rkw_debug::emu::{self, Config, Emu, Handle, RunState};
 use rkw_debug::machine::Clock;
 use rkw_debug::{Debugger, StopReason};
@@ -247,6 +247,31 @@ impl Session {
                 RunState::Running
             }
         }
+    }
+
+    /// Whether the tape was running at the last frame the machine painted.
+    pub fn tape_playing(&self) -> bool {
+        self.frames.tape_playing()
+    }
+
+    /// Press play, or stop a tape that is already running.
+    ///
+    /// The deck's own state decides which, not a note kept here: a tape that
+    /// has reached its end has stopped itself, and a toggle that did not know
+    /// that would need pressing twice to start the next load.
+    pub fn toggle_tape(&mut self) -> bool {
+        let playing = self.tape_playing();
+        let button = if playing { Tape::Stop } else { Tape::Play };
+        let _ = self.handle.send(Command::Tape(button));
+        // The machine may be parked in a pacing wait, and a tape that started
+        // a wait later than it was asked to is a tape the loader half missed.
+        self.wake();
+        !playing
+    }
+
+    /// Wind back to the first block, for the second go at a load.
+    pub fn rewind_tape(&mut self) {
+        let _ = self.handle.send(Command::Tape(Tape::Rewind));
     }
 
     /// Pull the reset line: the register file survives, as it does on real

@@ -86,10 +86,7 @@ fn a_step_over_does_not_stop_inside_a_recursion() {
     let sp_at_call = cpu.regs.sp;
     assert_eq!(cpu.regs.b, 2, "one level down");
 
-    assert_eq!(
-        dbg.step_over(&mut cpu, &mut mem, BUDGET),
-        StopReason::Step
-    );
+    assert_eq!(dbg.step_over(&mut cpu, &mut mem, BUDGET), StopReason::Step);
     assert_eq!(cpu.regs.pc, AFTER_INNER_CALL);
     assert_eq!(
         cpu.regs.sp, sp_at_call,
@@ -156,7 +153,10 @@ fn a_step_out_returns_to_the_caller() {
     let (mut cpu, mut mem) = recursive();
     let mut dbg = Debugger::new();
 
-    assert_eq!(dbg.run_to(&mut cpu, &mut mem, DOWN, BUDGET), StopReason::Step);
+    assert_eq!(
+        dbg.run_to(&mut cpu, &mut mem, DOWN, BUDGET),
+        StopReason::Step
+    );
     assert_eq!(cpu.regs.sp, STACK.wrapping_sub(2));
 
     assert_eq!(dbg.step_out(&mut cpu, &mut mem, BUDGET), StopReason::Step);
@@ -188,12 +188,18 @@ fn run_to_a_cursor_inside_a_loop_runs_a_lap() {
     let mut dbg = Debugger::new();
     let top = ORG + 2;
 
-    assert_eq!(dbg.run_to(&mut cpu, &mut mem, top, BUDGET), StopReason::Step);
+    assert_eq!(
+        dbg.run_to(&mut cpu, &mut mem, top, BUDGET),
+        StopReason::Step
+    );
     assert_eq!(cpu.regs.b, 3, "arrived at the top for the first time");
 
     // Already there: running to it again goes round rather than returning at
     // once.
-    assert_eq!(dbg.run_to(&mut cpu, &mut mem, top, BUDGET), StopReason::Step);
+    assert_eq!(
+        dbg.run_to(&mut cpu, &mut mem, top, BUDGET),
+        StopReason::Step
+    );
     assert_eq!(cpu.regs.b, 2);
 }
 

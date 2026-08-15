@@ -30,10 +30,7 @@ fn a_breakpoint_stops_at_its_address() {
 
     assert_eq!(
         dbg.resume(&mut cpu, &mut mem, BUDGET),
-        StopReason::Breakpoint {
-            id,
-            addr: LOOP_TOP
-        }
+        StopReason::Breakpoint { id, addr: LOOP_TOP }
     );
     assert_eq!(cpu.regs.pc, LOOP_TOP);
     assert_eq!(cpu.regs.b, 5, "stopped before the first iteration ran");
@@ -63,10 +60,7 @@ fn a_condition_is_consulted_and_counts_only_the_hits_it_allows() {
 
     assert_eq!(
         dbg.resume(&mut cpu, &mut mem, BUDGET),
-        StopReason::Breakpoint {
-            id,
-            addr: LOOP_TOP
-        }
+        StopReason::Breakpoint { id, addr: LOOP_TOP }
     );
     assert_eq!(cpu.regs.b, 2);
 
@@ -245,7 +239,12 @@ fn breakpoints_list_in_address_order() {
     dbg.breakpoints.add_exec(0x4000);
     dbg.breakpoints.add_exec(0x8000);
 
-    let addrs: Vec<u16> = dbg.breakpoints.breakpoints().iter().map(|b| b.addr).collect();
+    let addrs: Vec<u16> = dbg
+        .breakpoints
+        .breakpoints()
+        .iter()
+        .map(|b| b.addr)
+        .collect();
     assert_eq!(addrs, [0x4000, 0x8000, 0x9000]);
 }
 

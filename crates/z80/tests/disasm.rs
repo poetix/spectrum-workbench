@@ -272,7 +272,10 @@ fn flow_supports_step_over_and_run_to_return() {
     // should stop rather than decode whatever data follows.
     let jp = disasm(&[0xC3, 0x00, 0x90]);
     assert!(!jp.flow.falls_through());
-    assert!(disasm(&[0xC2, 0x00, 0x90]).flow.falls_through(), "JP NZ does");
+    assert!(
+        disasm(&[0xC2, 0x00, 0x90]).flow.falls_through(),
+        "JP NZ does"
+    );
 
     // JP (HL) has no statically known target.
     assert_eq!(
@@ -283,12 +286,7 @@ fn flow_supports_step_over_and_run_to_return() {
         }
     );
 
-    assert_eq!(
-        disasm(&[0xC9]).flow,
-        Flow::Return {
-            conditional: false
-        }
-    );
+    assert_eq!(disasm(&[0xC9]).flow, Flow::Return { conditional: false });
     assert_eq!(disasm(&[0xC0]).flow, Flow::Return { conditional: true });
     assert_eq!(disasm(&[0x76]).flow, Flow::Halt);
     assert_eq!(disasm(&[0xED, 0xB0]).flow, Flow::Repeat);

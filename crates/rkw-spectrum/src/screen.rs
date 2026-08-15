@@ -124,7 +124,11 @@ pub fn decode_into<S: Peek + ?Sized>(
             let bits = src.peek(pixel_addr(base, column, y));
             let (ink, paper) = colours(src.peek(attr_addr(base, column, y)), flash);
             for bit in 0..8 {
-                row[column * 8 + bit] = if bits & (0x80 >> bit) != 0 { ink } else { paper };
+                row[column * 8 + bit] = if bits & (0x80 >> bit) != 0 {
+                    ink
+                } else {
+                    paper
+                };
             }
         }
     }

@@ -10,6 +10,7 @@ mod common;
 
 use std::sync::Arc;
 
+use rkw_debug::command::Tape as TapeButton;
 use rkw_debug::machine::{Clock, Machine};
 use rkw_spectrum::frame::{CLOCK_HZ, T_STATES_PER_FRAME};
 use rkw_spectrum::{Loaded, Saving, Spectrum, ld_bytes};
@@ -127,6 +128,38 @@ fn stopping_the_tape_puts_the_line_back_where_it_idles() {
     let at = machine.t_states();
     tick_to(&mut machine, at + 1);
     assert_eq!(machine.next_event(), Some(at + 2168));
+}
+
+#[test]
+fn the_transport_buttons_are_the_deck_a_frontend_presses() {
+    // What a window sends is a command, and it arrives here: the buttons are
+    // the only way a running machine's tape can be started, because the
+    // frontend does not hold the machine.
+    let tap = Tap::builder()
+        .block(DATA_FLAG, &[0x00])
+        .block(DATA_FLAG, &[0xFF])
+        .build();
+    let mut machine = Spectrum::new();
+    machine.mount_tape(Arc::new(tap));
+
+    Machine::tape(&mut machine, TapeButton::Play);
+    assert!(machine.tape.is_playing());
+    tick_to(&mut machine, 3 * 2168 + 10);
+    assert!(!ear(&mut machine), "mid-pulse, and this one is low");
+
+    // Play again is not a toggle: a frontend that has lost track of the deck
+    // asks for what it wants, and gets it.
+    Machine::tape(&mut machine, TapeButton::Play);
+    assert!(machine.tape.is_playing());
+
+    Machine::tape(&mut machine, TapeButton::Stop);
+    assert!(!machine.tape.is_playing());
+    assert!(ear(&mut machine), "the line idles high");
+    assert_eq!(machine.next_event(), Some(T_STATES_PER_FRAME));
+
+    machine.tape.seek(1);
+    Machine::tape(&mut machine, TapeButton::Rewind);
+    assert_eq!(machine.tape.block(), 0, "back at the first block");
 }
 
 #[test]

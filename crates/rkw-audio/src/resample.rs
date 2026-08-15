@@ -558,7 +558,13 @@ mod tests {
             speaker: false,
             mic: true,
         };
-        let n = w.render(&[pack(200, mic), pack(400, HIGH)], LOW, 1_000, 0.2, &mut out);
+        let n = w.render(
+            &[pack(200, mic), pack(400, HIGH)],
+            LOW,
+            1_000,
+            0.2,
+            &mut out,
+        );
 
         assert_eq!(n, 10);
         assert_eq!(out[1], 0.0);

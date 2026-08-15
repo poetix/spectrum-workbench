@@ -21,8 +21,8 @@
 
 use std::collections::HashMap;
 
-use z80::disasm::Peek;
 use z80::Regs;
+use z80::disasm::Peek;
 
 use crate::bitmap::Bitmap;
 use crate::condition::Condition;
@@ -326,12 +326,7 @@ impl Breakpoints {
     /// Returns the breakpoint that fired, if one did: the bitmap can say yes
     /// for a breakpoint whose condition is false, whose ignore count has not
     /// run out, or that is disabled.
-    pub(crate) fn fired_exec<P: Peek>(
-        &mut self,
-        pc: u16,
-        regs: &Regs,
-        mem: &P,
-    ) -> Option<Id> {
+    pub(crate) fn fired_exec<P: Peek>(&mut self, pc: u16, regs: &Regs, mem: &P) -> Option<Id> {
         self.probes += 1;
         let bp = self.exec.get_mut(&pc)?;
         if !bp.enabled {
@@ -376,14 +371,10 @@ impl Breakpoints {
     /// Recompute one address's bit and the armed flag from the two things that
     /// can arm it. Every mutation ends here; nothing sets a bit directly.
     fn rearm_exec(&mut self, addr: u16) {
-        let armed = self
-            .exec
-            .get(&addr)
-            .is_some_and(|b| b.enabled)
+        let armed = self.exec.get(&addr).is_some_and(|b| b.enabled)
             || self.temporaries.iter().any(|t| t.addr == addr);
         self.exec_bits.set(addr, armed);
-        self.exec_armed =
-            self.exec.values().any(|b| b.enabled) || !self.temporaries.is_empty();
+        self.exec_armed = self.exec.values().any(|b| b.enabled) || !self.temporaries.is_empty();
     }
 
     // ---- Memory watchpoints -----------------------------------------------

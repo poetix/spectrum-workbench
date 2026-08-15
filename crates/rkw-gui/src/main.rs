@@ -18,7 +18,7 @@ usage: rkw [options]
 
   --rom FILE          the 48K ROM to boot. Without one the machine runs from
                       an empty memory, which is a black screen and a lesson.
-  --tape FILE         mount a .tap or .tzx, ready for LOAD \"\"
+  --tape FILE         mount a .tap or .tzx. Type LOAD \"\" and press F6.
   --play              start the tape immediately, for a machine already
                       sitting in a loading loop
   --scale N           window size, in machine pixels per screen pixel (3)
@@ -28,8 +28,9 @@ usage: rkw [options]
 While it is running:
 
   F5   pause or resume         F9   mute or unmute
-  F8   speed: 1x, 2x, max      F10  reset
-  F4   quit                    F11  full screen
+  F6   tape: play or stop      F10  reset
+  F7   tape: rewind            F11  full screen
+  F8   speed: 1x, 2x, max      F4   quit
 
 Every other key is the Spectrum's. ESCAPE is BREAK, not a way out; CTRL and
 ALT are both SYMBOL SHIFT, and the cursor keys are CAPS SHIFT and 5 to 8.";

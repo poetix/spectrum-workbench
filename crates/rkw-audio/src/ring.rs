@@ -123,7 +123,10 @@ impl SampleTx {
             self.ring.slots[slot].store(sample.to_bits(), Ordering::Relaxed);
         }
         // Publish the samples only once every one of them is in place.
-        self.ring.head.0.store(head + taken as u64, Ordering::Release);
+        self.ring
+            .head
+            .0
+            .store(head + taken as u64, Ordering::Release);
 
         if taken < samples.len() {
             let missed = (samples.len() - taken) as u64;
@@ -178,7 +181,10 @@ impl SampleRx {
             *slot = f32::from_bits(self.ring.slots[index].load(Ordering::Relaxed));
         }
         // Release the slots only once every sample is out of them.
-        self.ring.tail.0.store(tail + taken as u64, Ordering::Release);
+        self.ring
+            .tail
+            .0
+            .store(tail + taken as u64, Ordering::Release);
 
         if taken < out.len() {
             let missed = (out.len() - taken) as u64;
@@ -290,7 +296,10 @@ mod tests {
 
         assert!(got > 300, "the test should have moved samples, not {got}");
         assert_eq!(sent - got, rx.len() as u32, "the ring holds the difference");
-        assert!(tx.dropped() > 0, "the ring should have filled at some point");
+        assert!(
+            tx.dropped() > 0,
+            "the ring should have filled at some point"
+        );
     }
 
     #[test]

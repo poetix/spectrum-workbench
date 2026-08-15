@@ -40,6 +40,7 @@
 
 use rkw_audio::beeper::{Beeper, Config};
 use rkw_audio::ring::SampleTx;
+use rkw_debug::command::Tape as TapeButton;
 use rkw_debug::machine::{Clock, Machine};
 use z80::Bus;
 use z80::disasm::Peek;
@@ -220,6 +221,10 @@ impl Machine for AudioMachine {
 
     fn set_keys(&mut self, matrix: u64) {
         self.spectrum.set_keys(matrix);
+    }
+
+    fn tape(&mut self, button: TapeButton) {
+        self.spectrum.tape(button);
     }
 }
 

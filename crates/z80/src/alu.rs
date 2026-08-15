@@ -604,7 +604,11 @@ mod tests {
         let mut r = regs();
         r.a = 0x00;
         r.alu_sub(0x28);
-        assert_eq!(r.f & flag::XY, r.a & flag::XY, "SUB copies X/Y from the result");
+        assert_eq!(
+            r.f & flag::XY,
+            r.a & flag::XY,
+            "SUB copies X/Y from the result"
+        );
     }
 
     #[test]

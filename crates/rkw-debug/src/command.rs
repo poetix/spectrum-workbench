@@ -58,6 +58,14 @@ pub enum Command {
     /// [`Machine::set_keys`](crate::machine::Machine::set_keys). This crate
     /// only carries them, and a machine with no keyboard ignores them.
     Keys(u64),
+    /// Work the tape deck's transport: see [`Tape`].
+    ///
+    /// A tape is mounted before the machine starts, because an image is
+    /// megabytes and the ring carries sixteen bytes. What a user does *while*
+    /// it is running is press the buttons, and those come through here so that
+    /// the moment the pilot tone starts is a T-state in the log like every
+    /// other input.
+    Tape(Tape),
     /// Reset the CPU. Not a power-on: the register file survives, as it does
     /// on real hardware.
     Reset,
@@ -85,6 +93,44 @@ const QUIT: u64 = 13;
 const RESET: u64 = 14;
 const SET_PC: u64 = 15;
 const KEYS: u64 = 16;
+const TAPE: u64 = 17;
+
+/// A button on the tape deck.
+///
+/// Play and stop rather than a toggle, for the reason [`Command::Keys`] sends
+/// a matrix rather than an edge: the sender does not know what the deck is
+/// doing — a tape runs off its end, and a TZX block can stop it — and a
+/// toggle sent against a stale belief does the opposite of what was asked.
+/// Each of these is idempotent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tape {
+    /// Start the tape from where the head is.
+    Play,
+    /// Stop it, leaving the head where it is.
+    Stop,
+    /// Wind back to the first block. Does not stop a running tape, which is
+    /// what a deck with the button held down does.
+    Rewind,
+}
+
+impl Tape {
+    fn code(self) -> u64 {
+        match self {
+            Tape::Play => 0,
+            Tape::Stop => 1,
+            Tape::Rewind => 2,
+        }
+    }
+
+    fn from_code(code: u64) -> Option<Tape> {
+        match code {
+            0 => Some(Tape::Play),
+            1 => Some(Tape::Stop),
+            2 => Some(Tape::Rewind),
+            _ => None,
+        }
+    }
+}
 
 /// How much of a [`Command::Keys`] word is matrix: forty keys, which is what
 /// fits above the kind byte and is what a Spectrum has. A sender with a wider
@@ -126,6 +172,7 @@ impl Record for Command {
             Command::ClearAll => CLEAR_ALL,
             Command::Poke { addr, value } => POKE | u64::from(addr) << 8 | u64::from(value) << 24,
             Command::Keys(matrix) => KEYS | (matrix & KEYS_MASK) << 8,
+            Command::Tape(button) => TAPE | button.code() << 8,
             Command::Reset => RESET,
             Command::SetPc(addr) => SET_PC | u64::from(addr) << 8,
             Command::Quit => QUIT,
@@ -158,6 +205,7 @@ impl Record for Command {
             CLEAR_ALL => Some(Command::ClearAll),
             POKE => Some(Command::Poke { addr, value }),
             KEYS => Some(Command::Keys(word >> 8 & KEYS_MASK)),
+            TAPE => Tape::from_code(word >> 8).map(Command::Tape),
             RESET => Some(Command::Reset),
             SET_PC => Some(Command::SetPc(addr)),
             QUIT => Some(Command::Quit),
@@ -205,6 +253,9 @@ mod tests {
         Command::Keys(0),
         Command::Keys(KEYS_MASK),
         Command::Keys(0x00_5A_A5_5A_A5),
+        Command::Tape(Tape::Play),
+        Command::Tape(Tape::Stop),
+        Command::Tape(Tape::Rewind),
         Command::Quit,
     ];
 

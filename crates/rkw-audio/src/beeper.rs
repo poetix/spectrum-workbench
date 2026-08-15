@@ -186,7 +186,9 @@ impl Beeper {
 
 impl std::fmt::Debug for Beeper {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Beeper").field("config", &self.config).finish()
+        f.debug_struct("Beeper")
+            .field("config", &self.config)
+            .finish()
     }
 }
 
@@ -265,13 +267,20 @@ mod tests {
         let mut beeper = Beeper::new(Config::new(CLOCK, FRAME, 48_000));
         let mut last = 1.0f32;
         for frame in 0..50 {
-            let edges = if frame == 0 { vec![pack(0, HIGH)] } else { vec![] };
+            let edges = if frame == 0 {
+                vec![pack(0, HIGH)]
+            } else {
+                vec![]
+            };
             let start = if frame == 0 { LOW } else { HIGH };
             for &sample in beeper.render(&edges, start) {
                 last = sample;
             }
         }
-        assert!(last.abs() < 1e-4, "a held speaker should fall silent: {last}");
+        assert!(
+            last.abs() < 1e-4,
+            "a held speaker should fall silent: {last}"
+        );
     }
 
     #[test]
@@ -348,11 +357,17 @@ mod tests {
             mic: true,
         };
         beeper.render(&[], mic_only);
-        let with_mic = beeper.render(&[], mic_only).iter().fold(0.0f32, |a, &b| a.max(b));
+        let with_mic = beeper
+            .render(&[], mic_only)
+            .iter()
+            .fold(0.0f32, |a, &b| a.max(b));
 
         let mut beeper = flat(48_000);
         beeper.render(&[], HIGH);
-        let with_speaker = beeper.render(&[], HIGH).iter().fold(0.0f32, |a, &b| a.max(b));
+        let with_speaker = beeper
+            .render(&[], HIGH)
+            .iter()
+            .fold(0.0f32, |a, &b| a.max(b));
 
         assert!(with_mic > 0.0, "the MIC bit should make a sound at all");
         let ratio = with_mic / with_speaker;

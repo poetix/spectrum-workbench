@@ -113,7 +113,10 @@ fn resampled_at(half_period: u32, oversample: u32) -> Vec<f32> {
 
     let mut inner = vec![0.0f32; rates.max_windows(ticks)];
     let n = windowed.render(&edges, LOW, ticks, 0.0, &mut inner);
-    let out: Vec<f32> = inner[..n].iter().filter_map(|&x| decimator.push(x)).collect();
+    let out: Vec<f32> = inner[..n]
+        .iter()
+        .filter_map(|&x| decimator.push(x))
+        .collect();
 
     assert!(
         out.len() >= SETTLE + RECORD,

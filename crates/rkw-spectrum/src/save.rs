@@ -35,6 +35,7 @@
 //! a program that never touches bit 3 produces none.
 
 use rkw_audio::{levels_of, tick_of};
+use rkw_debug::command::Tape as TapeButton;
 use rkw_debug::machine::{Clock, Machine};
 use rkw_tape::{Recorder, Tap};
 use z80::Bus;
@@ -234,5 +235,9 @@ impl<M: Machine + AsRef<Spectrum>> Machine for Saving<M> {
 
     fn set_keys(&mut self, matrix: u64) {
         self.inner.set_keys(matrix);
+    }
+
+    fn tape(&mut self, button: TapeButton) {
+        self.inner.tape(button);
     }
 }

@@ -468,6 +468,7 @@ impl<M: Machine> Emu<M> {
             // writing, and nothing in the machine should be able to tell.
             Command::Poke { addr, value } => self.machine.write(addr, value),
             Command::Keys(matrix) => self.machine.set_keys(matrix),
+            Command::Tape(button) => self.machine.tape(button),
             Command::Reset => self.cpu.reset(),
             Command::SetPc(addr) => self.cpu.regs.pc = addr,
             Command::Quit => self.shared.set_stop(StopReason::Paused, RunState::Exited),

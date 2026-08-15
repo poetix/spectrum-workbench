@@ -16,6 +16,8 @@
 use z80::disasm::Peek;
 use z80::{Bus, FlatMemory};
 
+use crate::command::Tape;
+
 /// Something that knows how much emulated time has passed.
 pub trait Clock {
     /// T-states since the machine was made. Monotonic: an emulator that reset
@@ -57,6 +59,15 @@ pub trait Machine: Bus + Peek + Clock {
     /// that stored the matrix in an atomic the ULA read directly would be
     /// faster by 64 µs and would make every recorded session unreproducible.
     fn set_keys(&mut self, _matrix: u64) {}
+
+    /// Press a button on the tape deck, if there is one.
+    ///
+    /// Here rather than on the frontend's own copy of the machine for the same
+    /// reason as [`Machine::set_keys`]: there is no such copy. The machine is
+    /// on the emulation thread, and starting a tape is an input that has to
+    /// land at a T-state the machine agrees with — a pilot tone that began a
+    /// slice earlier or later is a different load.
+    fn tape(&mut self, _button: Tape) {}
 }
 
 impl Machine for FlatMemory {}

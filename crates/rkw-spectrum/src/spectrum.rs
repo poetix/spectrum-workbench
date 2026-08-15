@@ -21,6 +21,7 @@
 //! branch on machine type. What that costs is measured in
 //! `tests/throughput.rs`.
 
+use rkw_debug::command::Tape as TapeButton;
 use rkw_debug::machine::{Clock, Machine};
 use rkw_tape::Image;
 use z80::Bus;
@@ -371,5 +372,21 @@ impl Machine for Spectrum {
     /// window has just lost focus is a matrix of zero like any other.
     fn set_keys(&mut self, matrix: u64) {
         self.ula.keyboard = Keyboard::from_matrix(matrix);
+    }
+
+    /// The transport buttons, and the `EAR` line each of them leaves behind.
+    ///
+    /// A deck with no tape in it does nothing, which is what a real one does
+    /// too, and pressing play on a tape already running restarts nothing: the
+    /// head is where it is and the next pulse is due when it was due.
+    fn tape(&mut self, button: TapeButton) {
+        match button {
+            TapeButton::Play => self.play_tape(),
+            TapeButton::Stop => self.stop_tape(),
+            TapeButton::Rewind => {
+                self.tape.rewind();
+                self.drive_ear();
+            }
+        }
     }
 }

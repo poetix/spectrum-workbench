@@ -549,11 +549,24 @@ mod tests {
 
         let (edges, _) = ula.audio().frame();
         assert_eq!(
-            edges.iter().copied().map(rkw_audio::levels_of).collect::<Vec<_>>(),
+            edges
+                .iter()
+                .copied()
+                .map(rkw_audio::levels_of)
+                .collect::<Vec<_>>(),
             vec![
-                Levels { speaker: false, mic: true },
-                Levels { speaker: true, mic: true },
-                Levels { speaker: true, mic: false },
+                Levels {
+                    speaker: false,
+                    mic: true
+                },
+                Levels {
+                    speaker: true,
+                    mic: true
+                },
+                Levels {
+                    speaker: true,
+                    mic: false
+                },
             ]
         );
     }
@@ -568,7 +581,10 @@ mod tests {
         assert_eq!(edge_ticks(&ula), Vec::<u32>::new());
         assert_eq!(
             ula.audio().frame().1,
-            Levels { speaker: true, mic: false }
+            Levels {
+                speaker: true,
+                mic: false
+            }
         );
     }
 
@@ -598,23 +614,26 @@ mod tests {
         ula.write_port_fe(2 * T_STATES_PER_FRAME + 50, 0x10);
 
         ula.end_frame();
-        assert_eq!(
-            edge_ticks(&ula),
-            vec![50, T_STATES_PER_FRAME as u32 + 50]
-        );
+        assert_eq!(edge_ticks(&ula), vec![50, T_STATES_PER_FRAME as u32 + 50]);
 
         ula.end_frame();
         assert_eq!(edge_ticks(&ula), vec![50]);
         assert_eq!(
             ula.audio().frame().1,
-            Levels { speaker: false, mic: false }
+            Levels {
+                speaker: false,
+                mic: false
+            }
         );
 
         ula.end_frame();
         assert_eq!(edge_ticks(&ula), Vec::<u32>::new());
         assert_eq!(
             ula.audio().frame().1,
-            Levels { speaker: true, mic: false }
+            Levels {
+                speaker: true,
+                mic: false
+            }
         );
     }
 

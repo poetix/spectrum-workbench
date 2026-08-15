@@ -40,6 +40,10 @@ pub enum Hotkey {
     Speed,
     /// Silence, or sound again.
     Mute,
+    /// Start the tape, or stop it if it is running.
+    Tape,
+    /// Wind the tape back to its first block.
+    Rewind,
     /// Close the window.
     Quit,
 }
@@ -61,6 +65,8 @@ pub fn translate(key: &Key) -> Action {
     match key {
         Key::Named(named) => match named {
             NamedKey::F5 => Action::Frontend(Hotkey::Pause),
+            NamedKey::F6 => Action::Frontend(Hotkey::Tape),
+            NamedKey::F7 => Action::Frontend(Hotkey::Rewind),
             NamedKey::F8 => Action::Frontend(Hotkey::Speed),
             NamedKey::F9 => Action::Frontend(Hotkey::Mute),
             NamedKey::F10 => Action::Frontend(Hotkey::Reset),
@@ -148,6 +154,14 @@ mod tests {
         assert_eq!(
             translate(&Key::Named(NamedKey::F11)),
             Action::Frontend(Hotkey::Fullscreen)
+        );
+        assert_eq!(
+            translate(&Key::Named(NamedKey::F6)),
+            Action::Frontend(Hotkey::Tape)
+        );
+        assert_eq!(
+            translate(&Key::Named(NamedKey::F7)),
+            Action::Frontend(Hotkey::Rewind)
         );
         // Nothing a Spectrum can type is one of ours.
         for c in "abcdefghijklmnopqrstuvwxyz0123456789".chars() {

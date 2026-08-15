@@ -275,9 +275,19 @@ mod tests {
         let mut buf = [0.0f32; 100];
         let fill = output.fill(&mut buf);
 
-        assert_eq!(fill, Fill { written: 100, missing: 0 });
+        assert_eq!(
+            fill,
+            Fill {
+                written: 100,
+                missing: 0
+            }
+        );
         assert!(!fill.underran());
-        assert!(buf.iter().all(|&s| (s - 0.25).abs() < 1e-6), "{:?}", &buf[..4]);
+        assert!(
+            buf.iter().all(|&s| (s - 0.25).abs() < 1e-6),
+            "{:?}",
+            &buf[..4]
+        );
     }
 
     #[test]
@@ -372,7 +382,11 @@ mod tests {
         for _ in 0..100 {
             let fill = output.fill(&mut buf);
             assert_eq!(fill.written, 0);
-            assert!(buf.iter().all(|&s| s == 0.0), "still making noise: {:?}", &buf[..4]);
+            assert!(
+                buf.iter().all(|&s| s == 0.0),
+                "still making noise: {:?}",
+                &buf[..4]
+            );
         }
         assert_eq!(output.underruns(), 101);
     }

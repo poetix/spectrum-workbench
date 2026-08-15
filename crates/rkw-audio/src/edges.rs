@@ -290,7 +290,15 @@ mod tests {
 
     #[test]
     fn a_packed_edge_round_trips_its_tick_and_its_levels() {
-        for levels in [LOW, HIGH, BOTH, Levels { speaker: false, mic: true }] {
+        for levels in [
+            LOW,
+            HIGH,
+            BOTH,
+            Levels {
+                speaker: false,
+                mic: true,
+            },
+        ] {
             for tick in [0, 1, 3, FRAME - 1, FRAME, MAX_TICK] {
                 let edge = pack(tick, levels);
                 assert_eq!(tick_of(edge), tick, "{tick} {levels:?}");
@@ -314,11 +322,25 @@ mod tests {
     fn mic_takes_its_share_of_the_amplitude_and_leaves_the_rest_to_the_speaker() {
         assert_eq!(LOW.amplitude(0.2), 0.0);
         assert_eq!(HIGH.amplitude(0.2), 0.8);
-        assert_eq!(Levels { speaker: false, mic: true }.amplitude(0.2), 0.2);
+        assert_eq!(
+            Levels {
+                speaker: false,
+                mic: true
+            }
+            .amplitude(0.2),
+            0.2
+        );
         assert_eq!(BOTH.amplitude(0.2), 1.0);
         // A machine where only bit 4 is wired up.
         assert_eq!(BOTH.amplitude(0.0), 1.0);
-        assert_eq!(Levels { speaker: false, mic: true }.amplitude(0.0), 0.0);
+        assert_eq!(
+            Levels {
+                speaker: false,
+                mic: true
+            }
+            .amplitude(0.0),
+            0.0
+        );
     }
 
     #[test]

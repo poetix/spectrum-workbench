@@ -58,20 +58,44 @@ fn unprefixed_timings() {
 #[test]
 fn conditional_timings_differ_by_outcome() {
     // JR NZ,d: 12 taken, 7 not taken.
-    assert_eq!(time_with(&[0x20, 0x02], |c| c.regs.f = 0x00), 12, "JR NZ taken");
-    assert_eq!(time_with(&[0x20, 0x02], |c| c.regs.f = 0x40), 7, "JR NZ not taken");
+    assert_eq!(
+        time_with(&[0x20, 0x02], |c| c.regs.f = 0x00),
+        12,
+        "JR NZ taken"
+    );
+    assert_eq!(
+        time_with(&[0x20, 0x02], |c| c.regs.f = 0x40),
+        7,
+        "JR NZ not taken"
+    );
 
     // DJNZ d: 13 taken, 8 not taken.
     assert_eq!(time_with(&[0x10, 0x02], |c| c.regs.b = 2), 13, "DJNZ taken");
-    assert_eq!(time_with(&[0x10, 0x02], |c| c.regs.b = 1), 8, "DJNZ not taken");
+    assert_eq!(
+        time_with(&[0x10, 0x02], |c| c.regs.b = 1),
+        8,
+        "DJNZ not taken"
+    );
 
     // CALL NZ,nn: 17 taken, 10 not taken.
-    assert_eq!(time_with(&[0xC4, 0, 0x90], |c| c.regs.f = 0x00), 17, "CALL NZ taken");
-    assert_eq!(time_with(&[0xC4, 0, 0x90], |c| c.regs.f = 0x40), 10, "CALL NZ not taken");
+    assert_eq!(
+        time_with(&[0xC4, 0, 0x90], |c| c.regs.f = 0x00),
+        17,
+        "CALL NZ taken"
+    );
+    assert_eq!(
+        time_with(&[0xC4, 0, 0x90], |c| c.regs.f = 0x40),
+        10,
+        "CALL NZ not taken"
+    );
 
     // RET NZ: 11 taken, 5 not taken.
     assert_eq!(time_with(&[0xC0], |c| c.regs.f = 0x00), 11, "RET NZ taken");
-    assert_eq!(time_with(&[0xC0], |c| c.regs.f = 0x40), 5, "RET NZ not taken");
+    assert_eq!(
+        time_with(&[0xC0], |c| c.regs.f = 0x40),
+        5,
+        "RET NZ not taken"
+    );
 }
 
 #[test]
@@ -122,10 +146,26 @@ fn block_instruction_timings() {
 
     // The repeating forms cost five more T-states on every iteration that
     // loops, and the plain amount on the last one.
-    assert_eq!(time_with(&[0xED, 0xB0], |c| c.regs.set_bc(2)), 21, "LDIR looping");
-    assert_eq!(time_with(&[0xED, 0xB0], |c| c.regs.set_bc(1)), 16, "LDIR last pass");
-    assert_eq!(time_with(&[0xED, 0xB2], |c| c.regs.b = 2), 21, "INIR looping");
-    assert_eq!(time_with(&[0xED, 0xB2], |c| c.regs.b = 1), 16, "INIR last pass");
+    assert_eq!(
+        time_with(&[0xED, 0xB0], |c| c.regs.set_bc(2)),
+        21,
+        "LDIR looping"
+    );
+    assert_eq!(
+        time_with(&[0xED, 0xB0], |c| c.regs.set_bc(1)),
+        16,
+        "LDIR last pass"
+    );
+    assert_eq!(
+        time_with(&[0xED, 0xB2], |c| c.regs.b = 2),
+        21,
+        "INIR looping"
+    );
+    assert_eq!(
+        time_with(&[0xED, 0xB2], |c| c.regs.b = 1),
+        16,
+        "INIR last pass"
+    );
 }
 
 #[test]

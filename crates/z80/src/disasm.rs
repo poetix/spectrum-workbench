@@ -259,7 +259,11 @@ impl<W: fmt::Write> Sink for Text<W> {
     fn index(&mut self, idx: Idx, d: u8) {
         let signed = d as i8;
         if signed < 0 {
-            self.put(format_args!("({}-${:02X})", idx.name(), signed.unsigned_abs()));
+            self.put(format_args!(
+                "({}-${:02X})",
+                idx.name(),
+                signed.unsigned_abs()
+            ));
         } else {
             self.put(format_args!("({}+${:02X})", idx.name(), signed));
         }
@@ -470,14 +474,7 @@ fn operand_r<P: Peek, S: Sink>(c: &mut Cursor<P, S>, idx: Idx, slot: u8) {
     }
 }
 
-fn decode_x0<P: Peek, S: Sink>(
-    c: &mut Cursor<P, S>,
-    idx: Idx,
-    y: u8,
-    z: u8,
-    p: u8,
-    q: u8,
-) -> Flow {
+fn decode_x0<P: Peek, S: Sink>(c: &mut Cursor<P, S>, idx: Idx, y: u8, z: u8, p: u8, q: u8) -> Flow {
     match z {
         0 => match y {
             0 => {
@@ -631,14 +628,7 @@ fn decode_load<P: Peek, S: Sink>(c: &mut Cursor<P, S>, idx: Idx, y: u8, z: u8) -
     Flow::Normal
 }
 
-fn decode_x3<P: Peek, S: Sink>(
-    c: &mut Cursor<P, S>,
-    idx: Idx,
-    y: u8,
-    z: u8,
-    p: u8,
-    q: u8,
-) -> Flow {
+fn decode_x3<P: Peek, S: Sink>(c: &mut Cursor<P, S>, idx: Idx, y: u8, z: u8, p: u8, q: u8) -> Flow {
     match z {
         0 => {
             c.s("RET ");
@@ -654,9 +644,7 @@ fn decode_x3<P: Peek, S: Sink>(
                 match p {
                     0 => {
                         c.s("RET");
-                        Flow::Return {
-                            conditional: false,
-                        }
+                        Flow::Return { conditional: false }
                     }
                     1 => {
                         c.s("EXX");
@@ -830,12 +818,7 @@ fn decode_cb<P: Peek, S: Sink>(c: &mut Cursor<P, S>, idx: Idx) -> Flow {
     Flow::Normal
 }
 
-fn cb_operand<P: Peek, S: Sink>(
-    c: &mut Cursor<P, S>,
-    idx: Idx,
-    displacement: Option<u8>,
-    z: u8,
-) {
+fn cb_operand<P: Peek, S: Sink>(c: &mut Cursor<P, S>, idx: Idx, displacement: Option<u8>, z: u8) {
     match displacement {
         Some(d) => c.index(idx, d),
         None => c.s(R_NAMES[z as usize]),
@@ -922,9 +905,7 @@ fn decode_ed<P: Peek, S: Sink>(c: &mut Cursor<P, S>) -> Flow {
                 }
                 c.s("RETN");
             }
-            Flow::Return {
-                conditional: false,
-            }
+            Flow::Return { conditional: false }
         }
         6 => {
             const MODES: [u8; 8] = [0, 0, 1, 2, 0, 0, 1, 2];

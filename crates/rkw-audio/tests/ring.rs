@@ -13,8 +13,8 @@
 //! bug, and the counter is carried in the sample value so that the assertion
 //! can name which one.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
 use rkw_audio::ring;
@@ -95,7 +95,10 @@ fn a_consumer_that_outruns_the_producer_is_starved_and_not_confused() {
     loop {
         let n = rx.pop(&mut buf);
         for &sample in &buf[..n] {
-            assert_eq!(sample, got as f32, "sample {got} out of order under starvation");
+            assert_eq!(
+                sample, got as f32,
+                "sample {got} out of order under starvation"
+            );
             got += 1;
         }
         if n == 0 && done.load(Ordering::Acquire) && rx.is_empty() {
@@ -105,5 +108,8 @@ fn a_consumer_that_outruns_the_producer_is_starved_and_not_confused() {
 
     let sent = producer.join().expect("producer panicked");
     assert_eq!(got, sent);
-    assert!(rx.starved() > 0, "the consumer should have run dry repeatedly");
+    assert!(
+        rx.starved() > 0,
+        "the consumer should have run dry repeatedly"
+    );
 }

@@ -102,7 +102,15 @@ impl App {
         } else {
             ""
         };
-        let title = format!("rkw{state}{speed}{mute}");
+        // The one thing on the screen that a tape does not tell you: the
+        // border stripes say a loader is reading, but a tape running into a
+        // machine that is not listening looks exactly like a stopped one.
+        let tape = if self.session.tape_playing() {
+            " — tape"
+        } else {
+            ""
+        };
+        let title = format!("rkw{state}{speed}{mute}{tape}");
         if title != self.title
             && let Some(screen) = &self.screen
         {
@@ -134,6 +142,10 @@ impl App {
             Hotkey::Mute => {
                 self.session.toggle_mute();
             }
+            Hotkey::Tape => {
+                self.session.toggle_tape();
+            }
+            Hotkey::Rewind => self.session.rewind_tape(),
             Hotkey::Quit => event_loop.exit(),
         }
         self.session.apply_mute_policy();

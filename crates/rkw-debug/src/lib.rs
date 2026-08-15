@@ -271,12 +271,7 @@ impl Debugger {
     ///
     /// The first instruction always runs, so resuming from a breakpoint does
     /// not immediately hit it again.
-    pub fn resume<B: Bus + Peek>(
-        &mut self,
-        cpu: &mut Cpu,
-        bus: &mut B,
-        budget: u64,
-    ) -> StopReason {
+    pub fn resume<B: Bus + Peek>(&mut self, cpu: &mut Cpu, bus: &mut B, budget: u64) -> StopReason {
         self.breakpoints.clear_temporaries();
         self.run(cpu, bus, budget)
     }

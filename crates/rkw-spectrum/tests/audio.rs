@@ -69,8 +69,8 @@ fn play(delay: u8, frames: u64, sample_rate: u32) -> Vec<f32> {
     spectrum.memory.load(0x8000, &tone(delay));
     spectrum.memory.load(0x0038, HANDLER);
 
-    let config = Config::new(CLOCK_HZ, T_STATES_PER_FRAME as u32, sample_rate)
-        .speaker(Speaker::Flat);
+    let config =
+        Config::new(CLOCK_HZ, T_STATES_PER_FRAME as u32, sample_rate).speaker(Speaker::Flat);
     let machine = AudioMachine::new(spectrum, config, tx);
 
     let mut cpu = Cpu::new();
@@ -99,7 +99,11 @@ fn play(delay: u8, frames: u64, sample_rate: u32) -> Vec<f32> {
         );
     }
 
-    assert_eq!(e.machine.dropped(), 0, "the ring was too small for the test");
+    assert_eq!(
+        e.machine.dropped(),
+        0,
+        "the ring was too small for the test"
+    );
     assert_eq!(e.machine.edges_dropped(), 0, "the edge log overflowed");
 
     let mut samples = vec![0.0f32; rx.len()];

@@ -393,11 +393,7 @@ fn compare(input: &Case, expected: &Case, cpu: &Cpu, bus: &TestBus) -> Vec<Strin
     // Fuse instead advances past it and compensates elsewhere; the two agree
     // on every externally visible effect, including the address an interrupt
     // pushes, so the difference is normalised away here.
-    let pc = if r.halted {
-        r.pc.wrapping_add(1)
-    } else {
-        r.pc
-    };
+    let pc = if r.halted { r.pc.wrapping_add(1) } else { r.pc };
     cmp16("pc", pc, e.pc);
 
     if r.i != e.i {
