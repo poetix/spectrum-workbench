@@ -1,5 +1,5 @@
 ---
-id: "ADR-0024"
+id: "ADR-0026"
 title: Run z80test as a program, not as a data table
 date: 2026-08-14
 status: accepted

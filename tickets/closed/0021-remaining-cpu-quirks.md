@@ -38,7 +38,7 @@ about seven hours of emulated Spectrum.
 The harness is `crates/rkw-spectrum/tests/z80test.rs`, rewritten from last
 session's spike. It boots the ROM, mounts the tape, types `J""` and ENTER at
 the `K` cursor, answers `scroll?` with ENTER, and asserts on the suite's own
-`Result: NNN of 160 tests failed.` line. ADR-0024 records why it runs the suite
+`Result: NNN of 160 tests failed.` line. ADR-0026 records why it runs the suite
 as a program rather than lifting the CRC table into Rust — briefly, because
 running it as a program is what found the `EAR` bug below, and a Rust harness
 built on `FlatMemory` would have had no port `0xFE` to get wrong.
@@ -138,7 +138,7 @@ board issue, so modelling both would add a branch no test could reach, and the
 two agree on everything the ROM and `z80test` do. The rule is in the doc comment
 on `Ula::ear` for whoever needs it.
 
-**Lifting the CRC table into Rust.** ADR-0024.
+**Lifting the CRC table into Rust.** ADR-0026.
 
 **Running only `z80full`.** It does not subsume the others: `z80ccf` is the only
 suite that puts a `CCF` after every instruction, which is what validates the `Q`

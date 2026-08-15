@@ -56,7 +56,7 @@ are — which is exactly the property contention depends on.
 `z80test` is the only one of them whose expected values were measured on
 real hardware rather than produced by another emulator, and it is run the way a
 person would run it: boot the ROM, mount the tape, type `LOAD ""`, and read the
-result off the screen ([ADR-0024](adr/0024-run-z80test-as-a-program-not-as-a-data-table.md)).
+result off the screen ([ADR-0026](adr/0026-run-z80test-as-a-program-not-as-a-data-table.md)).
 `z80ccf` is what validates the `Q` latch of ADR-0003 — it puts a `CCF` after
 every instruction in the set and CRCs the flags — and `z80memptr` does the same
 with `BIT n,(HL)` for `WZ`. All seven suites run in six seconds of wall clock,
