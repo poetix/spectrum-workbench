@@ -1,0 +1,23 @@
+[package]
+name = "rkw-shot"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Run an assembled program headless, and look at the frames it drew"
+
+[dependencies]
+rkw-asm = { path = "../rkw-asm" }
+rkw-spectrum = { path = "../rkw-spectrum" }
+# For the `Machine` trait the slice loop runs against, and nothing else: this
+# crate does not want a debugger session, it wants a clock and a schedule.
+rkw-debug = { path = "../rkw-debug" }
+z80 = { path = "../z80" }
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "rkwshot"
+path = "src/main.rs"

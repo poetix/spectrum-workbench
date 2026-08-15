@@ -1607,11 +1607,22 @@ version = "0.1.0"
 dependencies = [
  "cpal",
  "pixels",
+ "rkw-asm",
  "rkw-audio",
  "rkw-debug",
  "rkw-spectrum",
  "rkw-tape",
  "winit",
+ "z80",
+]
+
+[[package]]
+name = "rkw-shot"
+version = "0.1.0"
+dependencies = [
+ "rkw-asm",
+ "rkw-debug",
+ "rkw-spectrum",
  "z80",
 ]
 

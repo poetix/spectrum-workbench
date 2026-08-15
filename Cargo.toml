@@ -8,6 +8,7 @@ members = [
     "crates/rkw-dbginfo",
     "crates/rkw-debug",
     "crates/rkw-gui",
+    "crates/rkw-shot",
     "crates/rkw-spectrum",
     "crates/rkw-tape",
     "crates/z80",
