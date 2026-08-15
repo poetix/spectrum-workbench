@@ -30,9 +30,8 @@
 //! alone it fills this in a few milliseconds and then drops everything, which
 //! is not a failure but the mechanism: how full the ring is, is how far ahead
 //! of the speaker the machine has got, and running frames until it is nearly
-//! full and then waiting is how the front end (ticket 0019) should pace
-//! itself. An emulator paced by its audio buffer needs no other clock and
-//! never has to correct for drift.
+//! full and then waiting is how `rkw-gui` paces itself. An emulator paced by
+//! its audio buffer needs no other clock and never has to correct for drift.
 //!
 //! # No `unsafe`, and no `unsafe`-shaped trick either
 //!

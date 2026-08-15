@@ -136,9 +136,9 @@ replay's audio against the original's.
 - A second `Machine` monomorphisation, so `docs/architecture.md`'s caution
   applies — any audio-cost figure has to be a ratio measured inside one binary.
 - Delegating `Bus` means delegating the machine-cycle wrappers as well as the
-  raw accessors, because ticket 0020 will override them for contention and a
-  wrapper left on the trait's default body would quietly run an uncontended
-  machine.
+  raw accessors, because the `Spectrum` overrides them for contention (0020)
+  and a wrapper left on the trait's default body would quietly run an
+  uncontended machine.
 - Restoring a checkpoint will click, because the beeper is not in it.
 - `rkw-audio` cannot use `crossbeam_utils` for ADR-0010's cache-padding
   constant, so it hard-codes the pessimistic 128 bytes instead. That is a

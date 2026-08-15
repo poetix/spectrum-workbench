@@ -142,7 +142,7 @@ impl<M: Machine + AsMut<Spectrum>> AsMut<Spectrum> for Saving<M> {
 
 // Being the machine underneath: every one of these goes straight through, and
 // the machine-cycle wrappers are delegated as well as the raw accessors for
-// the reason `audio.rs` gives — ticket 0020 will override them for contention,
+// the reason `audio.rs` gives — the `Spectrum` overrides them for contention,
 // and a wrapper left on the trait's default body would quietly run an
 // uncontended machine.
 impl<M: Machine> Bus for Saving<M> {

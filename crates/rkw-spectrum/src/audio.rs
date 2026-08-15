@@ -17,7 +17,7 @@
 //! holds, and adds one thing to `service_event` — make this frame's sound,
 //! then end the frame.
 //!
-//! What the front end (ticket 0019) does differently as a result is spawn
+//! What the front end does differently as a result is spawn
 //! `Emu<AudioMachine>` instead of `Emu<Spectrum>`. Nothing else changes: not
 //! the debugger, not the command set, not the events.
 //!

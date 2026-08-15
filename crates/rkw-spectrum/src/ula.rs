@@ -4,8 +4,8 @@
 //! time it is within the frame, the 50 Hz interrupt that starts each one, the
 //! flash cadence, the border colour, and both halves of port `0xFE` — the byte
 //! written, whose low three bits are the border, and the byte read, which is
-//! the keyboard and the `EAR` line. Contention is 0020, and reads state this
-//! already keeps.
+//! the keyboard and the `EAR` line. Contention is [`crate::contention`], which
+//! reads the clock this keeps.
 //!
 //! # Port `0xFE` is two different registers
 //!
@@ -36,8 +36,8 @@
 //! a per-T-state log, and nothing is allocated (ADR-0007).
 //!
 //! Sub-scanline border effects — two colours on one line — are not modelled.
-//! They exist, they need the T-state position within the line, and they need
-//! contention (0020) to be worth having.
+//! They exist and they need the T-state position within the line, which
+//! [`crate::contention`] now has; turning that into a border is ticket 0034.
 //!
 //! # The speaker is a log for the same reason, and is not double-buffered
 //!

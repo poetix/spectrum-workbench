@@ -204,9 +204,9 @@ hiccup can eat.
 
 Being full is the normal state, not the exceptional one. The core runs at about
 360× real time, so how full the ring is *is* how far ahead of the speaker the
-machine has got, and that is the signal the front end should pace on (ADR-0021,
-ticket 0019). An emulator paced by its audio buffer needs no other clock and
-never has to correct for drift.
+machine has got, and that is the signal the front end paces on (ADR-0021).
+An emulator paced by its audio buffer needs no other clock and never has to
+correct for drift.
 
 ## What a running tape costs
 

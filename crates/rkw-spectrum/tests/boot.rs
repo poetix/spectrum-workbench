@@ -26,8 +26,9 @@ use rkw_spectrum::Key;
 /// bytes at about 116 T-states each — a second and a half of emulated time, and
 /// the pause a real machine makes at power-on. The copyright line appears at
 /// frame 84; running 150 leaves enough margin that a failure here means the
-/// boot went wrong rather than that it was still going, and enough for
-/// contention (0020) to slow the RAM check down without moving this.
+/// boot went wrong rather than that it was still going. Contention (0020) has
+/// since slowed the RAM check down and the margin absorbed it, which is what it
+/// was for.
 const BOOT_FRAMES: u64 = 150;
 
 /// Where the ROM's copyright message ends up: the bottom line of the display.

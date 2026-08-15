@@ -54,9 +54,11 @@ the `DD` and `FD` prefixes.
   predates both discoveries and expects the older behaviour; `zexall` was
   measured to pass with the `Q` rule deliberately broken, so its CRCs do not
   depend on it.
-- So this behaviour rests on published research plus unit tests, and will not
-  be externally confirmed until raxoft's `z80ccf` can run — which needs a
-  Spectrum (ticket 0021).
+- So this behaviour rested on published research plus unit tests until there
+  was a Spectrum to run raxoft's `z80ccf` on. Ticket 0021 built one: `z80ccf`
+  puts a `CCF` after every instruction in the set and CRCs the flags against a
+  real machine's, and it passes 160/160. Both rules are now externally
+  confirmed.
 
 **Note:** the split into `q` and `q_prev` was not the original design. The
 first implementation cleared `Q` at the top of `execute`, which meant `SCF`

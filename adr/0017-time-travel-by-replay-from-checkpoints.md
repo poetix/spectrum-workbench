@@ -142,9 +142,9 @@ regression test that keeps 0012, 0013, 0016 and 0020 honest as they land.
 - Stepping back is milliseconds, not instant, and the cost is set by the
   checkpoint interval rather than by the distance travelled. Stepping back a
   hundred instructions costs about what stepping back one costs.
-- The determinism requirement now binds every future device. Audio (0014) and the
-  windowed front end (0019) touch host state and wall-clock time, and the
-  boundary between them and the machine has to stay clean or replay breaks.
+- The determinism requirement binds every device. Audio (0014) and the windowed
+  front end (0019) both touch host state and wall-clock time, and the boundary
+  between them and the machine has to stay clean or replay breaks.
 - A divergence is hard to debug by nature: the symptom is a machine that is
   different, arbitrarily far from the cause. The self-check above is the
   mitigation and is not optional.

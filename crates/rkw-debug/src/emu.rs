@@ -288,9 +288,8 @@ impl<M: Machine> Emu<M> {
     /// The core runs at about 360× real time, so a machine left to itself
     /// arrives at the end of a second of emulated sound in three milliseconds
     /// and throws the rest away. Something has to hold it back, and what that
-    /// something is is a policy: a headless run wants none, a frontend paces
-    /// on how far ahead of the speaker it has got (ticket 0019), and a test
-    /// wants neither.
+    /// something is is a policy: a headless run wants none, `rkw-gui` paces on
+    /// how far ahead of the speaker it has got, and a test wants neither.
     ///
     /// So `pace` is asked, after each slice that left the machine running, how
     /// long to wait before the next one — `None` to carry straight on. It is

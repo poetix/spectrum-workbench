@@ -13,7 +13,7 @@ commands. This decides what that GUI is, and it is earlier than it looks: the
 choice constrains the shape of the command layer, and that shape is decided when
 ticket 0010 is written rather than when a GUI is built.
 
-The candidates are a bespoke GUI (ticket 0019's window, extended), a TUI, and
+The candidates are a bespoke GUI (`rkw-gui`'s window, extended), a TUI, and
 the Debug Adapter Protocol — the JSON-RPC protocol VSCode, Cursor, Zed, Neovim
 and Emacs all speak to debug adapters.
 
