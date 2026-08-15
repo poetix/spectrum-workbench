@@ -7,3 +7,6 @@
 # The 48K ROM, fetched by scripts/fetch-rom.sh, and kept out for the same
 # reason: it is Amstrad's, and it is a test input rather than part of this.
 /crates/rkw-spectrum/tests/fixtures/
+
+# Per-developer worktrees and session state, not part of the project.
+/.claude/
