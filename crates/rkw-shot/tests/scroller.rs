@@ -24,7 +24,6 @@ const ACT_ATTR: u16 = 2;
 const SPR_W: usize = 2;
 const SPR_H: usize = 16;
 const SPR_CELLS: u16 = 2;
-const MASK_GROW: usize = 3;
 
 /// Where an actor is, on the character grid: column, row.
 fn actor(rig: &Rig, name: &str) -> (u8, u8) {
@@ -41,43 +40,6 @@ fn artwork(rig: &Rig, name: &str) -> Vec<u16> {
             u16::from_be_bytes([rig.peek(byte), rig.peek(byte + 1)])
         })
         .collect()
-}
-
-/// A sprite's plot table as the game built it: (mask, data) a row.
-fn plot_table(rig: &Rig, name: &str) -> Vec<(u16, u16)> {
-    let at = rig.symbol(name);
-    (0..SPR_H)
-        .map(|row| {
-            let entry = at + (row * SPR_W * 2) as u16;
-            (
-                u16::from_be_bytes([rig.peek(entry), rig.peek(entry + 2)]),
-                u16::from_be_bytes([rig.peek(entry + 1), rig.peek(entry + 3)]),
-            )
-        })
-        .collect()
-}
-
-/// The shape grown by one pixel in every direction, `passes` times over.
-///
-/// The model the game's own routine is checked against. Bits shifted out of
-/// the sixteen-pixel window are gone, exactly as they are on the Z80.
-fn grown(rows: &[u16], passes: usize) -> Vec<u16> {
-    let mut rows = rows.to_vec();
-    for _ in 0..passes {
-        for row in rows.iter_mut() {
-            *row |= (*row << 1) | (*row >> 1);
-        }
-        let was = rows.clone();
-        for (index, row) in rows.iter_mut().enumerate() {
-            if index > 0 {
-                *row |= was[index - 1];
-            }
-            if index + 1 < was.len() {
-                *row |= was[index + 1];
-            }
-        }
-    }
-    rows
 }
 
 /// The sixteen screen rows a ship is standing on, a row to a `u16`.
@@ -252,65 +214,57 @@ fn a_ship_stamps_its_cells_and_hands_them_back_when_it_moves() {
     }
 }
 
-/// The mask the game grew is the mask the artwork asks for.
-///
-/// Checks the Z80 that builds it against the same growth done here: the shape,
-/// fattened MASK_GROW times, complemented. A mask that disagreed with its own
-/// artwork would leave holes in the outline exactly where the ship is.
-#[test]
-fn the_mask_is_the_artwork_grown_by_mask_grow_pixels() {
-    let mut rig = game();
-    // Past the setup: clearing the screen is two frames of LDIR on its own.
-    rig.run_frames(10);
-
-    for (art, plot) in [("ship_gfx", "ship_plot"), ("enemy_gfx", "enemy_plot")] {
-        let shape = artwork(&rig, art);
-        let wanted = grown(&shape, MASK_GROW);
-        let built = plot_table(&rig, plot);
-
-        for (row, (mask, data)) in built.iter().enumerate() {
-            assert_eq!(
-                *data, shape[row],
-                "{art} row {row}: the data is not the artwork"
-            );
-            assert_eq!(
-                *mask, !wanted[row],
-                "{plot} row {row}: the mask is not the grown shape"
-            );
-        }
-    }
-}
-
 /// The whole of the clash argument, as an assertion.
 ///
-/// Inside the region the mask clears — the ship's shape, MASK_GROW pixels
-/// fatter — the only pixels left standing are the ship's own. So the nearest
-/// surviving terrain is MASK_GROW pixels from the ship, and the cells the ship
-/// has stamped with its colour hold nothing nearer than that to be drawn in it.
-fn nothing_but_the_ship_inside_its_outline(rig: &Rig, name: &str, art: &str) {
+/// A ship's cells hold the ship and nothing else: the artwork where the artwork
+/// is, black everywhere else, because the plotter writes rather than masks. So
+/// there is no terrain pixel anywhere inside the four cells the ship has
+/// stamped with its own colour, and a clash is not near-avoided but impossible.
+fn cells_hold_nothing_but_the_ship(rig: &Rig, name: &str, art: &str) {
     let (cx, cy) = actor(rig, name);
     let shape = artwork(rig, art);
-    let outline = grown(&shape, MASK_GROW);
     let on_screen = screen_rows(rig, cx, cy);
 
     for row in 0..SPR_H {
         assert_eq!(
-            on_screen[row] & outline[row],
-            shape[row],
-            "{name} at ({cx},{cy}), row {row}: something other than the ship is inside its outline"
+            on_screen[row], shape[row],
+            "{name} at ({cx},{cy}), row {row}: the cells hold something that is not the ship"
         );
     }
 }
 
 #[test]
-fn nothing_of_the_terrain_survives_inside_a_ship_s_outline() {
+fn a_ship_s_cells_hold_nothing_but_the_ship() {
     let mut rig = game();
     // Spread over a lap of the terrain, so the ships are checked against
     // canyon wall, open channel and marker rows alike.
     for _ in 0..12 {
         rig.run_frames(19);
-        nothing_but_the_ship_inside_its_outline(&rig, "ship", "ship_gfx");
-        nothing_but_the_ship_inside_its_outline(&rig, "enemy", "enemy_gfx");
+        cells_hold_nothing_but_the_ship(&rig, "ship", "ship_gfx");
+        cells_hold_nothing_but_the_ship(&rig, "enemy", "enemy_gfx");
+    }
+}
+
+/// Frame-filling is what makes the write above look like a ship rather than a
+/// black box, so it is a property of the artwork worth holding on to: every
+/// row of a sprite's own two cells carries something, and the shape reaches
+/// both edges somewhere.
+#[test]
+fn the_artwork_fills_the_square_it_is_drawn_in() {
+    let rig = game();
+    for art in ["ship_gfx", "enemy_gfx"] {
+        let shape = artwork(&rig, art);
+        let lit: u32 = shape.iter().map(|row| row.count_ones()).sum();
+        let coverage = 100 * lit / (SPR_H as u32 * 16);
+        assert!(coverage > 60, "{art} covers only {coverage}% of its square");
+        assert!(
+            shape.iter().any(|row| row & 0x8000 != 0),
+            "{art} never reaches its left edge"
+        );
+        assert!(
+            shape.iter().any(|row| row & 1 != 0),
+            "{art} never reaches its right edge"
+        );
     }
 }
 

@@ -311,12 +311,12 @@ draw_actors:
                 call release_cells
 
                 ld ix,enemy
-                ld hl,enemy_plot
+                ld hl,enemy_gfx
                 ld a,ATTR_ENEMY
                 call draw_actor
 
                 ld ix,ship
-                ld hl,ship_plot
+                ld hl,ship_gfx
                 ld a,ATTR_SHIP
                 call draw_actor
 

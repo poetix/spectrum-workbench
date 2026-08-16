@@ -29,11 +29,11 @@ The mechanics it already has, and what they cost, are ADR-0001.
 ## Notes
 
 **The frame budget is the design constraint.** The blit is 78.5% of a frame and
-the rest of the game currently fits in 14%, with 7% spare. Two levers are worth
+the rest of the game currently fits in 12%, with 10% spare. Two levers are worth
 more than any tuning of the blit, and both change how the game looks rather
 than how it is written: a narrower playfield moves fewer bytes, and a two-pixel
 scroll every other frame halves the cost at the same apparent speed. Decide
-which before the game logic grows into the spare 7%.
+which before the game logic grows into the spare 10%.
 
 **Collision wants the buffer, not the screen.** A ship on cell *cx*, *cy* is
 over the ring buffer bytes at `src + cy*8*PF_W + cx`, sixteen rows of two —
@@ -46,8 +46,8 @@ another emulator, or real hardware, would want: either the assembler grows
 `SAVETAP` (the workbench's ticket 0031), or something small builds a BASIC
 loader block and a code block with `rkw-tape`.
 
-**`MASK_GROW` is a dial, and it is the one to turn if the colour looks wrong.**
-Ships stand on the character grid and clear an outline around themselves rather
-than a box; terrain in the far corner of a covered cell still takes the ship's
-ink. Three pixels is where it stands. Wider is cleaner and fatter; the artwork
-filling more of its own cells does the same job without the weight.
+**New sprites have to be drawn frame-filling.** A ship's artwork is written over
+the cells it stands on, so anything it does not fill goes black, and a small
+shape in a 16x16 square reads as a box carried about. The test holds new artwork
+to better than 60% coverage and to reaching both edges, which is the rule stated
+rather than remembered.

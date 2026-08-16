@@ -26,24 +26,32 @@ ATTR_ENEMY      equ 0b01000010           ; bright red
 ; from anything else. Moving on the grid is what buys that: a ship anywhere
 ; else straddles cells it would have to claim and cannot fill.
 ;
-; The mask follows the shape. It is the artwork grown by MASK_GROW pixels in
-; every direction, so what the plotter clears is a black outline hugging the
-; ship rather than a black square around it — which is the difference between
-; a ship flying over the terrain and a ship carrying a hole in it.
+; Inside those cells the artwork is written rather than masked in, and its own
+; zeros are the mask: every pixel of every stamped cell is the ship's, so a
+; clash there is not mitigated but impossible. That asks of the artwork that it
+; fill its square, which is what the shapes in data.asm are drawn to.
 ;
-; What that outline is for is the colour. Inside a stamped cell, any terrain
-; left standing is drawn in the ship's ink; the outline is what pushes the
-; terrain far enough back that there is none of it near the ship to notice.
-; Terrain in the far corner of a covered cell is the residue this leaves, and
-; MASK_GROW is the dial: wider outline, less residue, fatter ship.
+; Around them the ship carries a black border, and the border is a *shape*: the
+; artwork grown MASK_GROW pixels in every direction. It spills out of the
+; ship's own cells into the ones next door — where no clash could happen and
+; nothing requires it — because a border that stopped at the cell boundary
+; would draw the boundary. What should read as an outline, or a shadow, would
+; read as the rectangle it was clipped to.
+;
+; So the drawn region is four bytes across and SPR_H+2*MASK_GROW rows tall: the
+; artwork written over the middle two bytes, the grown shape ANDed away either
+; side of it and above and below.
 
 SPR_W           equ 2                   ; bytes across: two cells
 SPR_H           equ 16                  ; rows, which is two cells
 SPR_CELLS       equ SPR_H/8             ; cells down
-MASK_GROW       equ 3                   ; pixels of black around the artwork
-
 SPR_ART         equ SPR_H*SPR_W         ; bytes of artwork
-SPR_PLOT        equ SPR_H*SPR_W*2       ; bytes of mask and data, interleaved
+
+MASK_GROW       equ 3                   ; pixels of border around the artwork
+HALO_W          equ SPR_W+2             ; bytes across the region drawn
+HALO_H          equ SPR_H+2*MASK_GROW   ; rows down it
+HALO_EDGE       equ MASK_GROW*2*HALO_W  ; the rows above and below the artwork
+HALO_MID        equ SPR_H*HALO_W        ; the rows the artwork is on
 
 ; The furthest a ship can stand and still be inside the playfield.
 SPR_CX_MAX      equ PF_W-SPR_W

@@ -59,10 +59,10 @@ Measured, from the border stripes the game paints (`rkwshot --profile`):
 | Phase | T-states | Share of a frame |
 | --- | --- | --- |
 | Blit | 54,880 | 78.5% |
-| Sprites, bullets, attributes | 7,616 | 10.9% |
+| Sprites, bullets, attributes | 5,824 | 8.3% |
 | Terrain line | 1,568 | 2.2% |
 | Input and movement | 896 | 1.3% |
-| Idle | 4,928 | 7.1% |
+| Idle | 6,720 | 9.6% |
 
 The blit's 49,920 T-states of instructions plus about 5,000 of ULA contention
 on the screen writes is the whole of the 78.5%. That is the budget this game
@@ -75,30 +75,37 @@ Attributes are not part of the window. The blit copies pixels only, so the
 cells a ship stamps have to be handed back explicitly when it moves, and that
 is the one piece of erase bookkeeping in the game.
 
-**Ships stand on the character grid and wear a black outline.** A ship moves
-eight pixels at a time in both directions, so the two cells by two it covers
-are exactly its own and stamping them takes nothing from anything else. Moving
-anywhere else would mean straddling cells it would have to claim and could not
-fill.
+**Ships stand on the character grid and fill it.** A ship moves eight pixels at
+a time in both directions, so the two cells by two it covers are exactly its
+own and stamping them takes nothing from anything else. Its artwork is then
+*written* rather than masked in — sixteen rows of two bytes, replacing what was
+there — so every pixel of every stamped cell is the ship's, artwork where the
+artwork is and black where it is not. A clash is not mitigated but impossible.
 
-The mask is then the shape of the ship rather than the shape of its cells: the
-artwork grown by `MASK_GROW` pixels in every direction and cleared to black, so
-what the ship carries is an outline hugging it and not a box around it. That is
-what keeps the terrain inside its cells — which is now drawn in the ship's ink —
-far enough away to read as the ship's own edge.
+That puts the whole of the problem in the artwork, which is where it belongs
+and where it costs nothing. A shape that fills its square leaves nothing to
+notice; a round one gives up four corners to black, which at this size is the
+edge of the character and reads as nothing; a small shape in a big square would
+read as a black box. `the_artwork_fills_the_square_it_is_drawn_in` holds new
+artwork to it, because the rule is invisible until it is broken.
 
-It is a distance, not a proof. Terrain in the far corner of a covered cell is
-still terrain in the ship's ink, and `MASK_GROW` is the dial between how much of
-that is left and how fat the ship looks. A blackout of the whole cell would be
-the proof, and would put the ship in a box; it was tried, and the box is worse
-than the residue.
+Two other schemes were built and measured before this one, and both were worse
+in the same way — they let the sprite be somewhere the cell grid was not:
 
-The mask is grown from the artwork at startup rather than drawn beside it, so
-there is one copy of the shape and the outline cannot disagree with it —
-`the_mask_is_the_artwork_grown_by_mask_grow_pixels` checks the Z80 that does it
-against the same growth done in Rust.
+- *Pixel-positioned, with the covered cells blacked out.* A 16x16 ship at a
+  pixel offset straddles three cells each way, so the blackout is 24x24 and the
+  ship flies in a visible box. Clash-free, and it looks it. 9,632 T-states.
+- *Character-positioned, with a mask grown from the shape.* An outline a few
+  pixels wide, so terrain survives further out in the cell — an AND and an OR
+  per byte, a table twice the size, a startup pass to grow the mask, and it only
+  ever pushes the clash further away rather than removing it. 7,616 T-states.
 
-Bullets are the counterexample that shows what the outline is for. They are
+Frame-filling artwork on the grid removes the clash outright and is the
+cheapest of the three at 5,824. The lesson is the one Lightforce already knew:
+the sprite that does not clash is the one drawn to the shape of the cells it
+stands on.
+
+Bullets are the counterexample that shows what all of this is for. They are
 pixel-positioned, but they stamp no attribute, so they have no cell to keep
-clean, need no outline, and are OR-plotted in whatever colour they are flying
+clean, nothing to clear, and are OR-plotted in whatever colour they are flying
 through.

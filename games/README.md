@@ -20,12 +20,11 @@ it afterwards. [ADR-0001](scroller/adr/0001-the-playfield-is-a-window-on-a-mirro
 says why, and what it costs.
 
 Ships stand on the character grid, so the two cells by two they cover are their
-own to stamp with their colour, and they wear a black outline — the artwork
-grown by a few pixels — which keeps the terrain inside those cells far enough
-from the ship to read as its edge rather than as scenery in the wrong colour.
-The outline is grown from the artwork at startup, so there is one copy of the
-shape. Bullets stamp no attribute, so they need no outline and go anywhere a
-pixel at a time.
+own to stamp with their colour, and their artwork is written over those cells
+rather than masked into them — which makes a clash impossible rather than merely
+unlikely, and asks in exchange that the artwork fill its square. That is why the
+ships are a filled delta and a disc. Bullets stamp no attribute, so they need no
+cell of their own and go anywhere a pixel at a time.
 
 Controls are `O` and `P` across, `Q` and `A` up and down, and `SPACE` to fire.
 
